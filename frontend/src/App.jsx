@@ -1,329 +1,606 @@
 import { useState } from "react";
-import { askAgent } from "./api";
+
+import {
+  askAgent,
+  approveRequest,
+  rejectRequest,
+} from "./api";
+
+import "./App.css";
+
 
 export default function App() {
+
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [approvalLoading, setApprovalLoading] =
+    useState(false);
+
 
   async function handleAsk() {
+
     if (!question.trim()) return;
 
     setLoading(true);
     setAnswer(null);
 
     try {
-      const data = await askAgent(question);
+
+      const data = await askAgent(
+        question
+      );
+
       setAnswer(data);
+
     } catch (error) {
-      setAnswer({ error: error.message });
+
+      setAnswer({
+        status: "error",
+        error: error.message,
+      });
+
     } finally {
+
       setLoading(false);
     }
   }
 
-  return (
-    <main style={styles.page}>
-      <div style={styles.container}>
 
-        {/* Header */}
-        <div style={styles.header}>
-          <div style={styles.logo}>DB</div>
+  async function handleApprove() {
+
+    if (!answer?.request_id) return;
+
+    setApprovalLoading(true);
+
+    try {
+
+      const data = await approveRequest(
+        answer.request_id
+      );
+
+      setAnswer(data);
+
+    } catch (error) {
+
+      setAnswer({
+        status: "error",
+        error: error.message,
+      });
+
+    } finally {
+
+      setApprovalLoading(false);
+    }
+  }
+
+
+  async function handleReject() {
+
+    if (!answer?.request_id) return;
+
+    setApprovalLoading(true);
+
+    try {
+
+      const data = await rejectRequest(
+        answer.request_id
+      );
+
+      setAnswer(data);
+
+    } catch (error) {
+
+      setAnswer({
+        status: "error",
+        error: error.message,
+      });
+
+    } finally {
+
+      setApprovalLoading(false);
+    }
+  }
+
+
+  return (
+    <main className="page">
+
+      <div className="container">
+
+        {/* HEADER */}
+
+        <div className="header">
+
+          <div className="logo">
+            DB
+          </div>
 
           <div>
-            <h1 style={styles.title}>Database AI Agent</h1>
-            <p style={styles.subtitle}>
-              Ask questions about your PostgreSQL database in plain English.
+
+            <h1 className="title">
+              Database AI Agent
+            </h1>
+
+            <p className="subtitle">
+              Query and safely modify your PostgreSQL
+              database using natural language.
             </p>
+
           </div>
+
         </div>
 
-        {/* Input Card */}
-        <div style={styles.card}>
-          <label style={styles.label}>Ask your database</label>
 
-          <div style={styles.inputRow}>
+        {/* ASK CARD */}
+
+        <div className="card">
+
+          <label className="label">
+            Ask your database
+          </label>
+
+          <div className="inputRow">
+
             <input
               value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleAsk()}
+              onChange={(e) =>
+                setQuestion(e.target.value)
+              }
+              onKeyDown={(e) =>
+                e.key === "Enter" &&
+                handleAsk()
+              }
               placeholder="e.g. How many users are there?"
-              style={styles.input}
+              className="input"
             />
 
             <button
               onClick={handleAsk}
               disabled={loading}
+              className="button"
               style={{
-                ...styles.button,
                 opacity: loading ? 0.7 : 1,
               }}
             >
-              {loading ? "Thinking..." : "Ask"}
+              {loading
+                ? "Thinking..."
+                : "Ask"}
             </button>
+
           </div>
 
-          <div style={styles.examples}>
+
+          {/* EXAMPLES */}
+
+          <div className="examples">
+
             <span>Try:</span>
 
             <button
-              style={styles.example}
-              onClick={() => setQuestion("How many users are there?")}
+              className="example"
+              onClick={() =>
+                setQuestion(
+                  "How many users are there?"
+                )
+              }
             >
               User count
             </button>
 
+
             <button
-              style={styles.example}
+              className="example"
               onClick={() =>
-                setQuestion("Which products have less than 10 items in stock?")
+                setQuestion(
+                  "Which products have less than 10 items in stock?"
+                )
               }
             >
               Low stock
             </button>
 
+
             <button
-              style={styles.example}
+              className="example"
               onClick={() =>
-                setQuestion("Which product has been ordered the most?")
+                setQuestion(
+                  "Update the city of user 1 to Pune"
+                )
               }
             >
-              Best-selling product
+              Update user
             </button>
+
+
+            <button
+              className="example"
+              onClick={() =>
+                setQuestion(
+                  "Create a table called employees with id, name and email"
+                )
+              }
+            >
+              Create table
+            </button>
+
           </div>
+
         </div>
 
-        {/* Error */}
+
+        {/* ERROR */}
+
         {answer?.error && (
-          <div style={styles.error}>
+
+          <div className="error">
+
             <strong>Error</strong>
-            <p>{answer.error}</p>
+
+            <p>
+              {answer.error}
+            </p>
+
           </div>
+
         )}
 
-        {/* Result */}
-        {answer?.sql && (
-          <div style={styles.results}>
+
+        {/* ================================================= */}
+        {/* HUMAN APPROVAL PREVIEW */}
+        {/* ================================================= */}
+
+        {answer?.status === "pending_approval" && (
+
+          <div className="approvalCard">
+
+            {/* HEADER */}
+
+            <div className="approvalHeader">
+
+              <div>
+
+                <h2 className="resultTitle">
+                  Human Approval Required
+                </h2>
+
+                <p className="approvalText">
+                  Review what this operation will
+                  affect before executing it.
+                </p>
+
+              </div>
+
+              <span className="warningBadge">
+                PENDING
+              </span>
+
+            </div>
+
+
+            {/* OPERATION INFORMATION */}
+
+            <div className="previewGrid">
+
+              <div className="previewItem">
+
+                <span className="previewLabel">
+                  Operation
+                </span>
+
+                <strong>
+                  {answer.preview?.operation}
+                </strong>
+
+              </div>
+
+
+              <div className="previewItem">
+
+                <span className="previewLabel">
+                  Target
+                </span>
+
+                <strong>
+                  {answer.preview?.target}
+                </strong>
+
+              </div>
+
+
+              {answer.preview?.affected_rows !== null &&
+                answer.preview?.affected_rows !== undefined && (
+
+                <div className="previewItem">
+
+                  <span className="previewLabel">
+                    Affected Rows
+                  </span>
+
+                  <strong>
+                    {answer.preview.affected_rows}
+                  </strong>
+
+                </div>
+
+              )}
+
+            </div>
+
+
+            {/* AFFECTED ROWS */}
+
+            {answer.preview?.rows?.length > 0 && (
+
+              <div>
+
+                <div className="sectionLabel">
+                  Rows That Will Be Affected
+                </div>
+
+                <pre className="code">
+                  {JSON.stringify(
+                    answer.preview.rows,
+                    null,
+                    2
+                  )}
+                </pre>
+
+              </div>
+
+            )}
+
+
+            {/* DDL MESSAGE */}
+
+            {answer.preview?.message && (
+
+              <div className="previewMessage">
+                {answer.preview.message}
+              </div>
+
+            )}
+
 
             {/* SQL */}
-            <section style={styles.resultCard}>
-              <div style={styles.resultHeader}>
-                <h2 style={styles.resultTitle}>Generated SQL</h2>
-                <span style={styles.badge}>READ ONLY</span>
+
+            <div className="sectionLabel">
+              Generated SQL
+            </div>
+
+            <pre className="code">
+              {answer.sql}
+            </pre>
+
+
+            {/* ACTIONS */}
+
+            <div className="approvalActions">
+
+              <button
+                onClick={handleReject}
+                disabled={approvalLoading}
+                className="rejectButton"
+              >
+                Reject
+              </button>
+
+
+              <button
+                onClick={handleApprove}
+                disabled={approvalLoading}
+                className="approveButton"
+              >
+                {approvalLoading
+                  ? "Executing..."
+                  : "Approve & Execute"}
+              </button>
+
+            </div>
+
+          </div>
+
+        )}
+
+
+        {/* ================================================= */}
+        {/* READ RESULT */}
+        {/* ================================================= */}
+
+        {answer?.status === "completed" && (
+
+          <div className="results">
+
+            <section className="resultCard">
+
+              <div className="resultHeader">
+
+                <h2 className="resultTitle">
+                  Generated SQL
+                </h2>
+
+                <span className="badge">
+                  READ
+                </span>
+
               </div>
 
-              <pre style={styles.code}>
+              <pre className="code">
                 {answer.sql}
               </pre>
+
             </section>
 
-            {/* Database Result */}
-            <section style={styles.resultCard}>
-              <div style={styles.resultHeader}>
-                <h2 style={styles.resultTitle}>Database Result</h2>
-                <span style={styles.successBadge}>SUCCESS</span>
+
+            <section className="resultCard">
+
+              <div className="resultHeader">
+
+                <h2 className="resultTitle">
+                  Database Result
+                </h2>
+
+                <span className="successBadge">
+                  SUCCESS
+                </span>
+
               </div>
 
-              <pre style={styles.code}>
-                {JSON.stringify(answer.result, null, 2)}
+              <pre className="code">
+                {JSON.stringify(
+                  answer.result,
+                  null,
+                  2
+                )}
               </pre>
+
             </section>
 
           </div>
+
         )}
 
-        {/* Footer */}
-        <footer style={styles.footer}>
-          LangGraph · MCP · Neon PostgreSQL · Groq / Ollama
+
+        {/* ================================================= */}
+        {/* APPROVED RESULT */}
+        {/* ================================================= */}
+
+        {answer?.status ===
+          "approved_and_executed" && (
+
+          <div className="results">
+
+            <section className="approvalSuccessCard">
+
+              <div className="approvalHeader successHeader">
+
+                <div>
+
+                  <h2 className="resultTitle">
+                    Modification Executed
+                  </h2>
+
+                  <p className="successText">
+                    The approved operation was
+                    successfully applied to the database.
+                  </p>
+
+                </div>
+
+                <span className="successBadge">
+                  SUCCESS
+                </span>
+
+              </div>
+
+
+              {/* WHAT WAS AFFECTED */}
+
+              <div className="previewGrid">
+
+                <div className="previewItem">
+
+                  <span className="previewLabel">
+                    Operation
+                  </span>
+
+                  <strong>
+                    {answer.preview?.operation}
+                  </strong>
+
+                </div>
+
+
+                <div className="previewItem">
+
+                  <span className="previewLabel">
+                    Target
+                  </span>
+
+                  <strong>
+                    {answer.preview?.target}
+                  </strong>
+
+                </div>
+
+
+                <div className="previewItem">
+
+                  <span className="previewLabel">
+                    Rows Affected
+                  </span>
+
+                  <strong>
+                    {answer.result?.row_count ?? "-"}
+                  </strong>
+
+                </div>
+
+              </div>
+
+
+              {/* EXECUTED SQL */}
+
+              <div className="sectionLabel">
+                Executed SQL
+              </div>
+
+              <pre className="code">
+                {answer.sql}
+              </pre>
+
+
+              {/* RESULT */}
+
+              <div className="sectionLabel">
+                Database Result
+              </div>
+
+              <pre className="code">
+                {JSON.stringify(
+                  answer.result,
+                  null,
+                  2
+                )}
+              </pre>
+
+            </section>
+
+          </div>
+
+        )}
+
+
+        {/* ================================================= */}
+        {/* REJECTED */}
+        {/* ================================================= */}
+
+        {answer?.status === "rejected" && (
+
+          <div className="rejected">
+
+            <strong>
+              Modification rejected
+            </strong>
+
+            <p>
+              No database changes were made.
+            </p>
+
+          </div>
+
+        )}
+
+
+        {/* FOOTER */}
+
+        <footer className="footer">
+          LangGraph · MCP · PostgreSQL ·
+          Groq / Ollama · Human-in-the-Loop
         </footer>
 
       </div>
+
     </main>
   );
 }
-
-
-const styles = {
-  page: {
-    minHeight: "100vh",
-    background: "#f6f7fb",
-    padding: "60px 20px",
-    fontFamily:
-      "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
-    color: "#1f2937",
-  },
-
-  container: {
-    maxWidth: "900px",
-    margin: "0 auto",
-  },
-
-  header: {
-    display: "flex",
-    alignItems: "center",
-    gap: "16px",
-    marginBottom: "30px",
-  },
-
-  logo: {
-    width: "52px",
-    height: "52px",
-    borderRadius: "14px",
-    background: "#111827",
-    color: "white",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontWeight: "700",
-    fontSize: "18px",
-  },
-
-  title: {
-    margin: 0,
-    fontSize: "30px",
-    fontWeight: "700",
-    color: "#111827",
-  },
-
-  subtitle: {
-    margin: "6px 0 0",
-    color: "#6b7280",
-    fontSize: "15px",
-  },
-
-  card: {
-    background: "white",
-    border: "1px solid #e5e7eb",
-    borderRadius: "16px",
-    padding: "24px",
-    boxShadow: "0 4px 20px rgba(0,0,0,0.04)",
-  },
-
-  label: {
-    display: "block",
-    fontSize: "14px",
-    fontWeight: "600",
-    marginBottom: "10px",
-    color: "#374151",
-  },
-
-  inputRow: {
-    display: "flex",
-    gap: "10px",
-  },
-
-  input: {
-    flex: 1,
-    padding: "13px 15px",
-    border: "1px solid #d1d5db",
-    borderRadius: "10px",
-    fontSize: "15px",
-    outline: "none",
-    background: "#fafafa",
-  },
-
-  button: {
-    padding: "13px 22px",
-    border: "none",
-    borderRadius: "10px",
-    background: "#111827",
-    color: "white",
-    fontSize: "14px",
-    fontWeight: "600",
-    cursor: "pointer",
-  },
-
-  examples: {
-    display: "flex",
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: "8px",
-    marginTop: "16px",
-    fontSize: "13px",
-    color: "#6b7280",
-  },
-
-  example: {
-    border: "1px solid #e5e7eb",
-    background: "#f9fafb",
-    borderRadius: "20px",
-    padding: "6px 11px",
-    color: "#4b5563",
-    cursor: "pointer",
-    fontSize: "12px",
-  },
-
-  results: {
-    marginTop: "24px",
-    display: "grid",
-    gap: "18px",
-  },
-
-  resultCard: {
-    background: "white",
-    border: "1px solid #e5e7eb",
-    borderRadius: "16px",
-    overflow: "hidden",
-    boxShadow: "0 4px 20px rgba(0,0,0,0.03)",
-  },
-
-  resultHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "16px 20px",
-    borderBottom: "1px solid #e5e7eb",
-  },
-
-  resultTitle: {
-    margin: 0,
-    fontSize: "15px",
-    fontWeight: "600",
-    color: "#111827",
-  },
-
-  badge: {
-    fontSize: "10px",
-    fontWeight: "700",
-    padding: "5px 8px",
-    borderRadius: "6px",
-    background: "#fef3c7",
-    color: "#92400e",
-  },
-
-  successBadge: {
-    fontSize: "10px",
-    fontWeight: "700",
-    padding: "5px 8px",
-    borderRadius: "6px",
-    background: "#dcfce7",
-    color: "#166534",
-  },
-
-  code: {
-    margin: 0,
-    padding: "20px",
-    background: "#111827",
-    color: "#e5e7eb",
-    fontSize: "14px",
-    lineHeight: "1.6",
-    overflowX: "auto",
-    minHeight: "40px",
-  },
-
-  error: {
-    marginTop: "20px",
-    padding: "16px",
-    borderRadius: "12px",
-    background: "#fef2f2",
-    border: "1px solid #fecaca",
-    color: "#991b1b",
-  },
-
-  footer: {
-    textAlign: "center",
-    marginTop: "35px",
-    fontSize: "12px",
-    color: "#9ca3af",
-  },
-};

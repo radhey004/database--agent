@@ -1,40 +1,53 @@
 import json
+import uuid
 from typing import Literal, TypedDict
 
 from pydantic import BaseModel
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import (
+    StateGraph,
+    START,
+    END,
+)
 from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
 
-from .config import GROQ_API_KEY, OLLAMA_MODEL, OLLAMA_URL
+from .config import (
+    GROQ_API_KEY,
+    OLLAMA_MODEL,
+    OLLAMA_URL,
+)
 from .mcp_client import call_tool
-from .prompts import SQL_PROMPT, ROUTER_PROMPT
+from .prompts import (
+    SQL_PROMPT,
+    ROUTER_PROMPT,
+)
+from .sql_validator import (
+    validate_read_sql,
+    validate_write_sql,
+)
 
-
-# -------------------------
-# State
-# -------------------------
 
 class State(TypedDict, total=False):
+
     question: str
     schema: dict
     intent: str
     sql: str
     result: object
+    preview: dict
     error: str
+    approval_required: bool
+    request_id: str
 
-
-# -------------------------
-# Intent output
-# -------------------------
 
 class Intent(BaseModel):
-    type: Literal["read", "write", "unrelated"]
 
+    type: Literal[
+        "read",
+        "write",
+        "unrelated",
+    ]
 
-# -------------------------
-# Models
-# -------------------------
 
 groq = ChatGroq(
     model="openai/gpt-oss-120b",
@@ -49,11 +62,28 @@ ollama = ChatOllama(
 )
 
 
-# -------------------------
-# Helpers
-# -------------------------
+pending_requests = {}
+
+
+BLOCKED_COMMANDS = (
+    "GRANT",
+    "REVOKE",
+    "COMMENT",
+    "BEGIN",
+    "COMMIT",
+    "ROLLBACK",
+    "SAVEPOINT",
+    "RELEASE",
+    "CREATE EXTENSION",
+    "CREATE DATABASE",
+    "DROP DATABASE",
+    "ALTER DATABASE",
+    "COPY",
+)
+
 
 def clean_sql(text: str) -> str:
+
     return (
         text
         .strip()
@@ -64,7 +94,6 @@ def clean_sql(text: str) -> str:
 
 
 def content_to_text(content):
-    """Convert MCP content to normal text."""
 
     if isinstance(content, str):
         return content
@@ -75,9 +104,31 @@ def content_to_text(content):
     return str(content)
 
 
-# -------------------------
-# Get database schema
-# -------------------------
+def check_blocked_command(
+    question: str
+):
+
+    normalized = " ".join(
+        question.upper().split()
+    )
+
+    for command in BLOCKED_COMMANDS:
+
+        if (
+            normalized == command
+            or normalized.startswith(
+                command + " "
+            )
+            or normalized.startswith(
+                command + ";"
+            )
+        ):
+
+            raise ValueError(
+                "SQL command is not allowed: "
+                + command
+            )
+
 
 async def get_schema(state: State):
 
@@ -85,6 +136,14 @@ async def get_schema(state: State):
         "database_schema",
         {}
     )
+
+    if response.is_error:
+
+        raise ValueError(
+            content_to_text(
+                response.content[0]
+            )
+        )
 
     schema = json.loads(
         content_to_text(
@@ -97,15 +156,9 @@ async def get_schema(state: State):
     }
 
 
-# -------------------------
-# Dynamic intent router
-# -------------------------
-
-async def classify_intent(state: State):
-    """
-    Dynamically classify the question as:
-    read, write, or unrelated.
-    """
+async def classify_intent(
+    state: State
+):
 
     prompt = ROUTER_PROMPT.format(
         schema=state["schema"],
@@ -113,35 +166,51 @@ async def classify_intent(state: State):
     )
 
     try:
-        # Groq primary.
-        router = groq.with_structured_output(Intent)
 
-        result = await router.ainvoke(prompt)
+        router = groq.with_structured_output(
+            Intent
+        )
 
-        print("Intent model: Groq")
+        result = await router.ainvoke(
+            prompt
+        )
+
+        print(
+            "Intent model: Groq"
+        )
 
     except Exception as error:
 
-        print("Groq router failed:", error)
-        print("Using Ollama router")
+        print(
+            "Groq router failed:",
+            error
+        )
 
-        # Ollama fallback.
-        router = ollama.with_structured_output(Intent)
+        router = ollama.with_structured_output(
+            Intent
+        )
 
-        result = await router.ainvoke(prompt)
+        result = await router.ainvoke(
+            prompt
+        )
 
-    print("Detected intent:", result.type)
+        print(
+            "Intent model: Ollama"
+        )
+
+    print(
+        "Detected intent:",
+        result.type
+    )
 
     return {
         "intent": result.type
     }
 
 
-# -------------------------
-# Generate SQL
-# -------------------------
-
-async def generate_sql(state: State):
+async def generate_sql(
+    state: State
+):
 
     prompt = SQL_PROMPT.format(
         schema=state["schema"],
@@ -149,40 +218,72 @@ async def generate_sql(state: State):
     )
 
     try:
-        response = await groq.ainvoke(prompt)
+
+        response = await groq.ainvoke(
+            prompt
+        )
 
         sql = clean_sql(
             response.content
         )
 
-        print("Using Groq")
+        print(
+            "SQL model: Groq"
+        )
 
     except Exception as error:
 
-        print("Groq failed:", error)
         print(
-            "Using Ollama backup:",
-            OLLAMA_MODEL
+            "Groq SQL generation failed:",
+            error
         )
 
-        response = await ollama.ainvoke(prompt)
+        response = await ollama.ainvoke(
+            prompt
+        )
 
         sql = clean_sql(
             response.content
         )
 
-    print("Generated SQL:", sql)
+        print(
+            "SQL model: Ollama"
+        )
+
+    print(
+        "Generated SQL:",
+        sql
+    )
+
+    if not sql:
+
+        raise ValueError(
+            "The AI could not generate "
+            "a valid SQL query."
+        )
+
+    if state["intent"] == "read":
+
+        validate_read_sql(sql)
+
+    elif state["intent"] == "write":
+
+        validate_write_sql(sql)
+
+    else:
+
+        raise ValueError(
+            "Invalid intent for SQL generation."
+        )
 
     return {
         "sql": sql
     }
 
 
-# -------------------------
-# Execute SQL
-# -------------------------
-
-async def execute_sql(state: State):
+async def execute_read_sql(
+    state: State
+):
 
     response = await call_tool(
         "run_sql",
@@ -191,8 +292,8 @@ async def execute_sql(state: State):
         }
     )
 
-    # MCP tool may report an error.
     if response.is_error:
+
         raise ValueError(
             content_to_text(
                 response.content[0]
@@ -210,47 +311,106 @@ async def execute_sql(state: State):
     }
 
 
-# -------------------------
-# Reject request
-# -------------------------
+async def request_approval(
+    state: State
+):
 
-async def reject_request(state: State):
+    # Validate before preview.
+    validate_write_sql(
+        state["sql"]
+    )
 
-    if state["intent"] == "write":
-        message = (
-            "This database agent is read-only. "
-            "INSERT, UPDATE, DELETE and other "
-            "write operations are not supported."
+    # Generate a preview before asking
+    # the human for approval.
+    response = await call_tool(
+        "preview_modification",
+        {
+            "query": state["sql"]
+        }
+    )
+
+    if response.is_error:
+
+        raise ValueError(
+            content_to_text(
+                response.content[0]
+            )
         )
 
-    else:
-        message = (
-            "I can only answer questions related "
-            "to the connected PostgreSQL database."
+    preview = json.loads(
+        content_to_text(
+            response.content[0]
         )
+    )
+
+    request_id = str(
+        uuid.uuid4()
+    )
+
+    pending_requests[request_id] = {
+        "sql": state["sql"],
+        "question": state["question"],
+        "intent": state["intent"],
+        "preview": preview,
+    }
+
+    print(
+        "Approval required:",
+        request_id
+    )
 
     return {
-        "error": message
+        "approval_required": True,
+        "request_id": request_id,
+        "preview": preview,
     }
 
 
-# -------------------------
-# Router
-# -------------------------
+async def reject_request(
+    state: State
+):
 
-def route_intent(state: State):
+    return {
+        "error": (
+            "I can only answer questions "
+            "related to the connected "
+            "PostgreSQL database."
+        )
+    }
+
+
+def route_intent(
+    state: State
+):
 
     if state["intent"] == "read":
+
+        return "generate_sql"
+
+    if state["intent"] == "write":
+
         return "generate_sql"
 
     return "reject_request"
 
 
-# -------------------------
-# LangGraph
-# -------------------------
+def route_after_sql(
+    state: State
+):
+
+    if state["intent"] == "read":
+
+        return "execute_read_sql"
+
+    if state["intent"] == "write":
+
+        return "request_approval"
+
+    return "reject_request"
+
 
 graph = StateGraph(State)
+
 
 graph.add_node(
     "get_schema",
@@ -268,8 +428,13 @@ graph.add_node(
 )
 
 graph.add_node(
-    "execute_sql",
-    execute_sql
+    "execute_read_sql",
+    execute_read_sql
+)
+
+graph.add_node(
+    "request_approval",
+    request_approval
 )
 
 graph.add_node(
@@ -292,18 +457,36 @@ graph.add_conditional_edges(
     "classify_intent",
     route_intent,
     {
-        "generate_sql": "generate_sql",
-        "reject_request": "reject_request",
+        "generate_sql":
+            "generate_sql",
+
+        "reject_request":
+            "reject_request",
+    }
+)
+
+graph.add_conditional_edges(
+    "generate_sql",
+    route_after_sql,
+    {
+        "execute_read_sql":
+            "execute_read_sql",
+
+        "request_approval":
+            "request_approval",
+
+        "reject_request":
+            "reject_request",
     }
 )
 
 graph.add_edge(
-    "generate_sql",
-    "execute_sql"
+    "execute_read_sql",
+    END
 )
 
 graph.add_edge(
-    "execute_sql",
+    "request_approval",
     END
 )
 
@@ -316,22 +499,156 @@ graph.add_edge(
 agent = graph.compile()
 
 
-# -------------------------
-# Public function
-# -------------------------
+async def ask_agent(
+    question: str
+):
 
-async def ask_agent(question: str):
+    question = question.strip()
 
-    result = await agent.ainvoke({
-        "question": question
-    })
+    if not question:
+
+        raise ValueError(
+            "Question is required."
+        )
+
+    check_blocked_command(
+        question
+    )
+
+    result = await agent.ainvoke(
+        {
+            "question": question
+        }
+    )
 
     if result.get("error"):
+
         raise ValueError(
             result["error"]
         )
 
+    if result.get(
+        "approval_required"
+    ):
+
+        return {
+            "status":
+                "pending_approval",
+
+            "request_id":
+                result["request_id"],
+
+            "question":
+                question,
+
+            "sql":
+                result["sql"],
+
+            "preview":
+                result["preview"],
+        }
+
     return {
-        "sql": result["sql"],
-        "result": result["result"]
+        "status":
+            "completed",
+
+        "sql":
+            result["sql"],
+
+        "result":
+            result["result"],
+    }
+
+
+async def approve_request(
+    request_id: str
+):
+
+    request = pending_requests.get(
+        request_id
+    )
+
+    if not request:
+
+        raise ValueError(
+            "Approval request not found "
+            "or expired."
+        )
+
+    sql = request["sql"]
+
+    # Validate AGAIN immediately
+    # before actual execution.
+    validate_write_sql(sql)
+
+    response = await call_tool(
+        "run_modification",
+        {
+            "query": sql
+        }
+    )
+
+    if response.is_error:
+
+        raise ValueError(
+            content_to_text(
+                response.content[0]
+            )
+        )
+
+    result = json.loads(
+        content_to_text(
+            response.content[0]
+        )
+    )
+
+    del pending_requests[
+        request_id
+    ]
+
+    return {
+        "status":
+            "approved_and_executed",
+
+        "sql":
+            sql,
+
+        "preview":
+            request["preview"],
+
+        "result":
+            result,
+    }
+
+
+def reject_approval(
+    request_id: str
+):
+
+    request = pending_requests.pop(
+        request_id,
+        None
+    )
+
+    if not request:
+
+        raise ValueError(
+            "Approval request not found "
+            "or expired."
+        )
+
+    return {
+        "status":
+            "rejected",
+
+        "sql":
+            request["sql"],
+
+        "preview":
+            request["preview"],
+
+        "message": (
+            "The modification was rejected. "
+            "No database changes were made."
+        ),
     }
