@@ -1,135 +1,496 @@
 import re
+import time
+import uuid
+
+from urllib.parse import urlparse
 
 import psycopg2
 
-from .config import DATABASE_URL
+from psycopg2 import pool
+
 from .sql_validator import (
     validate_read_sql,
     validate_write_sql,
 )
 
 
-def get_connection():
+MAX_ROWS = 100
 
-    return psycopg2.connect(
-        DATABASE_URL,
-        connect_timeout=10,
+SESSION_TTL_SECONDS = 60 * 60
+
+
+class ConnectionManager:
+
+    def __init__(self):
+
+        self.connections = {}
+
+
+    def create_connection(
+        self,
+        database_url: str,
+    ):
+
+        self.cleanup_expired()
+
+        connection_id = str(
+            uuid.uuid4()
+        )
+
+        connection_pool = (
+            pool.SimpleConnectionPool(
+                minconn=1,
+                maxconn=5,
+                dsn=database_url,
+            )
+        )
+
+        conn = None
+
+        try:
+
+            conn = (
+                connection_pool.getconn()
+            )
+
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT version();"
+            )
+
+            version = (
+                cursor.fetchone()[0]
+            )
+
+            cursor.close()
+
+        except Exception:
+
+            connection_pool.closeall()
+
+            raise
+
+        finally:
+
+            if conn:
+
+                connection_pool.putconn(
+                    conn
+                )
+
+
+        parsed = urlparse(
+            database_url
+        )
+
+        database_name = (
+            parsed.path.lstrip("/")
+        )
+
+        host = parsed.hostname
+
+
+        self.connections[
+            connection_id
+        ] = {
+            "pool":
+                connection_pool,
+
+            "created_at":
+                time.time(),
+
+            "last_used":
+                time.time(),
+
+            "database_name":
+                database_name,
+
+            "host":
+                host,
+
+            "version":
+                version,
+        }
+
+
+        return {
+            "connection_id":
+                connection_id,
+
+            "database_name":
+                database_name,
+
+            "host":
+                host,
+
+            "version":
+                version,
+        }
+
+
+    def get_connection_pool(
+        self,
+        connection_id: str,
+    ):
+
+        self.cleanup_expired()
+
+        session = (
+            self.connections.get(
+                connection_id
+            )
+        )
+
+        if not session:
+
+            raise ValueError(
+                "Database connection not found "
+                "or expired."
+            )
+
+        session[
+            "last_used"
+        ] = time.time()
+
+        return session[
+            "pool"
+        ]
+
+
+    def disconnect(
+        self,
+        connection_id: str,
+    ):
+
+        session = (
+            self.connections.pop(
+                connection_id,
+                None,
+            )
+        )
+
+        if not session:
+
+            raise ValueError(
+                "Database connection not found "
+                "or already disconnected."
+            )
+
+        session[
+            "pool"
+        ].closeall()
+
+
+    def cleanup_expired(
+        self,
+    ):
+
+        now = time.time()
+
+        expired_ids = []
+
+
+        for (
+            connection_id,
+            session,
+        ) in self.connections.items():
+
+            inactive_for = (
+                now
+                - session[
+                    "last_used"
+                ]
+            )
+
+            if (
+                inactive_for
+                > SESSION_TTL_SECONDS
+            ):
+
+                expired_ids.append(
+                    connection_id
+                )
+
+
+        for connection_id in expired_ids:
+
+            session = (
+                self.connections.pop(
+                    connection_id,
+                    None,
+                )
+            )
+
+            if session:
+
+                session[
+                    "pool"
+                ].closeall()
+
+
+connection_manager = (
+    ConnectionManager()
+)
+
+
+def get_connection(
+    connection_id: str,
+):
+
+    connection_pool = (
+        connection_manager
+        .get_connection_pool(
+            connection_id
+        )
+    )
+
+    conn = (
+        connection_pool.getconn()
+    )
+
+    return (
+        connection_pool,
+        conn,
     )
 
 
-def get_schema():
+def release_connection(
+    connection_pool,
+    conn,
+):
 
-    conn = get_connection()
+    connection_pool.putconn(
+        conn
+    )
+
+
+def get_schema(
+    connection_id: str,
+):
+
+    connection_pool, conn = (
+        get_connection(
+            connection_id
+        )
+    )
+
     cur = conn.cursor()
 
     try:
 
         cur.execute("""
             SELECT
-                table_name,
-                column_name
-            FROM information_schema.columns
-            WHERE table_schema = 'public'
+                c.table_name,
+                c.column_name,
+                c.data_type,
+                c.is_nullable,
+                c.column_default,
+                CASE
+                    WHEN tc.constraint_type = 'PRIMARY KEY'
+                    THEN true
+                    ELSE false
+                END AS is_primary_key
+
+            FROM information_schema.columns c
+
+            LEFT JOIN
+                information_schema.key_column_usage kcu
+
+                ON c.table_schema =
+                    kcu.table_schema
+
+                AND c.table_name =
+                    kcu.table_name
+
+                AND c.column_name =
+                    kcu.column_name
+
+            LEFT JOIN
+                information_schema.table_constraints tc
+
+                ON kcu.constraint_name =
+                    tc.constraint_name
+
+                AND kcu.table_schema =
+                    tc.table_schema
+
+                AND kcu.table_name =
+                    tc.table_name
+
+            WHERE
+                c.table_schema = 'public'
+
             ORDER BY
-                table_name,
-                ordinal_position;
+                c.table_name,
+                c.ordinal_position;
         """)
 
         rows = cur.fetchall()
 
         schema = {}
 
-        for table, column in rows:
 
-            schema.setdefault(
-                table,
-                []
-            ).append(column)
+        for (
+            table,
+            column,
+            data_type,
+            nullable,
+            default,
+            primary_key,
+        ) in rows:
+
+            if table not in schema:
+
+                schema[table] = {
+                    "columns": []
+                }
+
+
+            schema[
+                table
+            ]["columns"].append({
+
+                "name":
+                    column,
+
+                "type":
+                    data_type,
+
+                "nullable":
+                    nullable == "YES",
+
+                "default":
+                    default,
+
+                "primary_key":
+                    bool(primary_key),
+            })
+
 
         return schema
 
     finally:
 
         cur.close()
-        conn.close()
+
+        release_connection(
+            connection_pool,
+            conn,
+        )
 
 
-def execute_query(query):
+def execute_query(
+    connection_id: str,
+    query: str,
+):
 
     query = validate_read_sql(
         query
     )
 
-    conn = get_connection()
+    connection_pool, conn = (
+        get_connection(
+            connection_id
+        )
+    )
+
     cur = conn.cursor()
 
     try:
 
-        cur.execute(query)
+        cur.execute(
+            query
+        )
 
         if cur.description is None:
 
             raise ValueError(
-                "Query did not return data"
+                "Query did not return any data."
             )
 
+
         columns = [
-            desc[0]
-            for desc in cur.description
+
+            column[0]
+
+            for column
+            in cur.description
         ]
 
-        rows = cur.fetchmany(100)
+
+        rows = cur.fetchmany(
+            MAX_ROWS
+        )
+
 
         return [
-            dict(zip(columns, row))
-            for row in rows
+
+            dict(
+                zip(
+                    columns,
+                    row,
+                )
+            )
+
+            for row
+            in rows
         ]
 
     finally:
 
         cur.close()
-        conn.close()
+
+        release_connection(
+            connection_pool,
+            conn,
+        )
 
 
-def _get_operation(query: str):
+def _get_operation(
+    query: str,
+):
 
     normalized = " ".join(
         query.upper().split()
     )
 
-    if normalized.startswith("INSERT"):
-        return "INSERT"
 
-    if normalized.startswith("UPDATE"):
-        return "UPDATE"
+    for operation in (
 
-    if normalized.startswith("DELETE"):
-        return "DELETE"
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "CREATE",
+        "ALTER",
+        "DROP",
 
-    if normalized.startswith("CREATE"):
-        return "CREATE"
+    ):
 
-    if normalized.startswith("ALTER"):
-        return "ALTER"
+        if normalized.startswith(
+            operation
+        ):
 
-    if normalized.startswith("DROP"):
-        return "DROP"
+            return operation
 
-    if normalized.startswith("TRUNCATE"):
-        return "TRUNCATE"
 
     return "MODIFICATION"
 
 
-def _get_target(query: str):
+def _get_target(
+    query: str,
+):
 
     patterns = [
 
-        r"\bUPDATE\s+([a-zA-Z_][\w.]*)",
+        r"\bUPDATE\s+"
+        r"([a-zA-Z_][\w.]*)",
 
-        r"\bDELETE\s+FROM\s+([a-zA-Z_][\w.]*)",
+        r"\bDELETE\s+FROM\s+"
+        r"([a-zA-Z_][\w.]*)",
 
-        r"\bINSERT\s+INTO\s+([a-zA-Z_][\w.]*)",
+        r"\bINSERT\s+INTO\s+"
+        r"([a-zA-Z_][\w.]*)",
 
         r"\bCREATE\s+TABLE\s+"
         r"(?:IF\s+NOT\s+EXISTS\s+)?"
@@ -141,11 +502,8 @@ def _get_target(query: str):
         r"\bDROP\s+TABLE\s+"
         r"(?:IF\s+EXISTS\s+)?"
         r"([a-zA-Z_][\w.]*)",
-
-        r"\bTRUNCATE\s+"
-        r"(?:TABLE\s+)?"
-        r"([a-zA-Z_][\w.]*)",
     ]
+
 
     for pattern in patterns:
 
@@ -157,360 +515,91 @@ def _get_target(query: str):
 
         if match:
 
-            return match.group(1)
-
-    return "database"
-
-
-def _rows_from_cursor(cur):
-
-    if cur.description is None:
-
-        return []
-
-    columns = [
-        desc[0]
-        for desc in cur.description
-    ]
-
-    rows = cur.fetchall()
-
-    return [
-        dict(zip(columns, row))
-        for row in rows
-    ]
-
-
-def _get_where_clause(query: str):
-
-    match = re.search(
-        r"\bWHERE\b(.+?)(?:\s+RETURNING\b|;?$)",
-        query,
-        re.IGNORECASE | re.DOTALL,
-    )
-
-    if not match:
-
-        return None
-
-    return match.group(1).strip()
-
-
-def _preview_delete(
-    query: str,
-    table: str,
-):
-
-    where = _get_where_clause(
-        query
-    )
-
-    if not where:
-
-        select_query = (
-            f"SELECT * FROM {table}"
-        )
-
-    else:
-
-        select_query = (
-            f"SELECT * FROM {table} "
-            f"WHERE {where}"
-        )
-
-    rows = execute_query(
-        select_query
-    )
-
-    return {
-        "operation": "DELETE",
-        "target": table,
-        "affected_rows": len(rows),
-        "rows": rows,
-        "preview_only": True,
-        "message": (
-            "These rows would be deleted "
-            "after approval."
-        ),
-    }
-
-
-def _preview_update(
-    query: str,
-    table: str,
-):
-
-    match = re.search(
-        r"\bUPDATE\s+"
-        r"[a-zA-Z_][\w.]*"
-        r"\s+SET\s+(.+?)"
-        r"\s+WHERE\s+(.+?)"
-        r"(?:\s+RETURNING\b.*)?"
-        r";?$",
-        query,
-        re.IGNORECASE | re.DOTALL,
-    )
-
-    if not match:
-
-        raise ValueError(
-            "UPDATE preview requires a WHERE clause."
-        )
-
-    set_clause = match.group(1).strip()
-    where_clause = match.group(2).strip()
-
-    before_query = (
-        f"SELECT * FROM {table} "
-        f"WHERE {where_clause}"
-    )
-
-    before_rows = execute_query(
-        before_query
-    )
-
-    changes = []
-
-    assignments = [
-        item.strip()
-        for item in set_clause.split(",")
-    ]
-
-    for row in before_rows:
-
-        before = dict(row)
-        after = dict(row)
-
-        for assignment in assignments:
-
-            parts = assignment.split(
-                "=",
+            return match.group(
                 1
             )
 
-            if len(parts) != 2:
-                continue
 
-            column = parts[0].strip()
-            value = parts[1].strip()
-
-            value_clean = (
-                value
-                .strip()
-                .rstrip(";")
-            )
-
-            if (
-                value_clean.startswith("'")
-                and value_clean.endswith("'")
-            ):
-
-                new_value = value_clean[
-                    1:-1
-                ]
-
-            elif value_clean.upper() == "NULL":
-
-                new_value = None
-
-            else:
-
-                new_value = value_clean
-
-            after[column] = new_value
-
-        changes.append({
-            "before": before,
-            "after": after,
-        })
-
-    return {
-        "operation": "UPDATE",
-        "target": table,
-        "affected_rows": len(before_rows),
-        "rows": changes,
-        "preview_only": True,
-        "message": (
-            "These rows would be updated "
-            "after approval."
-        ),
-    }
-
-
-def _preview_insert(
-    query: str,
-    table: str,
-):
-
-    match = re.search(
-        r"\bINSERT\s+INTO\s+"
-        r"[a-zA-Z_][\w.]*"
-        r"\s*\((.*?)\)"
-        r"\s*VALUES\s*\((.*?)\)"
-        r"(?:\s+RETURNING\b.*)?"
-        r";?$",
-        query,
-        re.IGNORECASE | re.DOTALL,
-    )
-
-    if not match:
-
-        raise ValueError(
-            "Unable to preview this INSERT."
-        )
-
-    columns = [
-        column.strip()
-        for column in match.group(1).split(",")
-    ]
-
-    values = [
-        value.strip()
-        for value in match.group(2).split(",")
-    ]
-
-    if len(columns) != len(values):
-
-        raise ValueError(
-            "INSERT columns and values do not match."
-        )
-
-    row = {}
-
-    for column, value in zip(
-        columns,
-        values,
-    ):
-
-        value = (
-            value
-            .strip()
-            .rstrip(";")
-        )
-
-        if (
-            value.startswith("'")
-            and value.endswith("'")
-        ):
-
-            value = value[1:-1]
-
-        elif value.upper() == "NULL":
-
-            value = None
-
-        row[column] = value
-
-    return {
-        "operation": "INSERT",
-        "target": table,
-        "affected_rows": 1,
-        "rows": [row],
-        "preview_only": True,
-        "message": (
-            "This row would be inserted "
-            "after approval."
-        ),
-    }
-
-
-def _preview_ddl(
-    query: str,
-    operation: str,
-    target: str,
-):
-
-    return {
-        "operation": operation,
-        "target": target,
-        "affected_rows": None,
-        "rows": [],
-        "preview_only": True,
-        "message": (
-            f"{operation} operation on "
-            f"{target} would be applied "
-            "after approval."
-        ),
-    }
+    return None
 
 
 def preview_modification(
-    query
+    connection_id: str,
+    query: str,
 ):
 
-    query = validate_write_sql(
+    validate_write_sql(
         query
     )
 
-    operation = _get_operation(
-        query
-    )
+    return {
 
-    target = _get_target(
-        query
-    )
+        "operation":
+            _get_operation(
+                query
+            ),
 
-    if operation == "DELETE":
+        "target":
+            _get_target(
+                query
+            ),
 
-        return _preview_delete(
+        "query":
             query,
-            target,
-        )
 
-    if operation == "UPDATE":
-
-        return _preview_update(
-            query,
-            target,
-        )
-
-    if operation == "INSERT":
-
-        return _preview_insert(
-            query,
-            target,
-        )
-
-    return _preview_ddl(
-        query,
-        operation,
-        target,
-    )
+        "connection_id":
+            connection_id,
+    }
 
 
 def execute_modification(
-    query
+    connection_id: str,
+    query: str,
 ):
 
     query = validate_write_sql(
         query
     )
 
-    conn = get_connection()
+    connection_pool, conn = (
+        get_connection(
+            connection_id
+        )
+    )
+
     cur = conn.cursor()
 
     try:
 
-        cur.execute(query)
+        cur.execute(
+            query
+        )
 
-        result = {
-            "status": "success",
-            "message": (
-                "Modification executed "
-                "successfully."
-            ),
-            "row_count": cur.rowcount,
-        }
-
-        if cur.description is not None:
-
-            result["rows"] = (
-                _rows_from_cursor(cur)
-            )
+        affected_rows = (
+            cur.rowcount
+        )
 
         conn.commit()
 
-        return result
+
+        return {
+
+            "success":
+                True,
+
+            "operation":
+                _get_operation(
+                    query
+                ),
+
+            "target":
+                _get_target(
+                    query
+                ),
+
+            "affected_rows":
+                affected_rows,
+        }
 
     except Exception:
 
@@ -521,4 +610,8 @@ def execute_modification(
     finally:
 
         cur.close()
-        conn.close()
+
+        release_connection(
+            connection_pool,
+            conn,
+        )

@@ -1,169 +1,134 @@
 ROUTER_PROMPT = """
-You are the intent router for a PostgreSQL database agent.
+You are an intent classification system
+for a PostgreSQL database agent.
 
 Database schema:
 {schema}
 
-User question:
+User request:
 {question}
 
-Classify the question into exactly one category.
+Classify the request into EXACTLY one word.
 
-read:
-The user wants to retrieve ANY information that can be
-answered using the connected PostgreSQL database.
+READ
+- The user wants to retrieve information
+  from the database.
 
-This includes:
-- SELECT queries
-- counting records
-- filtering records
-- searching records
-- sorting
-- aggregation
-- averages
-- sums
-- minimum/maximum
-- checking whether records exist
-- comparing database records
-- asking about tables
-- asking about columns
-- asking about database structure
+WRITE
+- The user wants to modify database data
+  or database structure.
+
+UNRELATED
+- The request cannot reasonably be answered
+  using the database.
 
 Examples:
 
-- How many users are there?
-- How many users are there in Pune?
-- Show all users.
-- Which users live in Pune?
-- How many products are there?
-- What is the average product price?
-- Which product is the most expensive?
-- Are there any users from Mumbai?
-- What tables are in the database?
-- What columns does the users table have?
+"How many users are there?"
+READ
 
-IMPORTANT:
-If the question asks for information about users,
-products, orders, employees, or any other object/table
-that exists in the database schema, classify it as READ.
+"Show all users from Pune"
+READ
 
-write:
-The user wants to change the connected PostgreSQL database.
+"What is the average age?"
+READ
 
-This includes:
-- INSERT
-- UPDATE
-- DELETE
-- CREATE
-- ALTER
-- DROP
-- TRUNCATE
-- Other DML or DDL operations
+"Update user 5"
+WRITE
 
-Examples:
+"Delete inactive users"
+WRITE
 
-- Add a new user named Rahul.
-- Update user 5's city to Pune.
-- Delete cancelled orders.
-- Create a new table called employees.
-- Add an email column to users.
-- Drop the old products table.
+"Create a products table"
+WRITE
 
-unrelated:
-The question cannot be answered using the connected
-PostgreSQL database.
+"Who is the president of India?"
+UNRELATED
 
-Examples:
+Return ONLY:
 
-- Who is the president of India?
-- Explain Python.
-- What is React?
-- Tell me a joke.
-- What is machine learning?
-
-IMPORTANT:
-Only classify general-knowledge questions as unrelated.
-
-If the question can reasonably be answered by querying
-the connected PostgreSQL database, classify it as READ.
-
-Return ONLY one of:
-read
-write
-unrelated
+READ
+WRITE
+UNRELATED
 """
 
 
 SQL_PROMPT = """
-You are a PostgreSQL SQL expert.
+You are the SQL generation node of an
+agentic PostgreSQL database system.
 
-Database schema:
+DATABASE SCHEMA:
 {schema}
 
-User question:
+USER REQUEST:
 {question}
 
 Generate exactly ONE PostgreSQL SQL statement.
 
 Rules:
 
-1. For read requests:
-   - Generate SELECT only.
+1. Use ONLY tables and columns that actually
+   exist in the provided schema.
 
-2. For modification requests:
-   - Generate the required DML or DDL statement.
+2. Never invent tables.
 
-Allowed modification types:
-- INSERT
-- UPDATE
-- DELETE
-- CREATE
-- ALTER
-- DROP
-- TRUNCATE
+3. Never invent columns.
 
-3. Never generate multiple statements.
+4. READ requests must use SELECT.
 
-4. Never use:
-- GRANT
-- REVOKE
-- COMMENT
-- BEGIN
-- COMMIT
-- ROLLBACK
-- SAVEPOINT
-- RELEASE
-- CREATE EXTENSION
-- CREATE DATABASE
-- DROP DATABASE
-- ALTER DATABASE
-- COPY
-- transaction control statements
-- administrative commands
-- server/file execution commands
+5. WRITE requests may use:
+   INSERT
+   UPDATE
+   DELETE
+   CREATE
+   ALTER
+   DROP
 
-5. Use only tables and columns available in the
-database schema.
+6. Never generate multiple statements.
 
-6. For UPDATE and DELETE:
-   - Always use a WHERE clause unless the user
-     explicitly asks to affect every row.
+7. Never generate:
 
-7. For INSERT:
-   - Use the correct existing columns.
-   - Do not invent columns.
-   - Do not omit required information when it is
-     explicitly required by the schema.
+   GRANT
+   REVOKE
+   COMMENT
+   BEGIN
+   COMMIT
+   ROLLBACK
+   SAVEPOINT
+   RELEASE
+   COPY
+   CREATE DATABASE
+   DROP DATABASE
+   ALTER DATABASE
+   CREATE EXTENSION
 
-8. For CREATE/ALTER/DROP:
-   - Only operate on database objects relevant
-     to the user's request.
+8. Preserve EVERY important requirement from
+   the user's request.
 
-9. Never answer general knowledge questions.
+9. If the user asks for sorting, include the
+   requested ORDER BY.
 
-10. Return ONLY SQL.
+10. If the user asks for filtering, include the
+    requested WHERE condition.
 
-11. Do not use markdown.
+11. If the user asks for aggregation, include
+    the required aggregation.
 
-12. Do not explain the SQL.
+12. If a requested field does not exist in the
+    schema, do NOT replace the request with a
+    generic SELECT.
+
+13. Do not silently ignore any important part
+    of the user's request.
+
+14. UPDATE and DELETE should normally contain
+    a WHERE clause.
+
+15. Return ONLY SQL.
+
+16. Do not use markdown.
+
+17. Do not provide explanations.
+
+Return only the SQL statement.
 """

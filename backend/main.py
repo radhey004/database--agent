@@ -13,20 +13,36 @@ from .agent import (
     reject_approval,
 )
 
+from .database_routes import (
+    router as database_router,
+)
+
 
 app = FastAPI(
-    title="DB Agent"
+    title="Database AI Agent V2",
+    version="2.0.0",
 )
 
 
 app.add_middleware(
+
     CORSMiddleware,
+
     allow_origins=[
         "http://localhost:5173",
         "http://localhost:5174",
     ],
+
+    allow_credentials=True,
+
     allow_methods=["*"],
+
     allow_headers=["*"],
+)
+
+
+app.include_router(
+    database_router
 )
 
 
@@ -34,64 +50,114 @@ app.add_middleware(
 def home():
 
     return {
-        "message": "DB Agent is running"
+
+        "name":
+            "Database AI Agent",
+
+        "version":
+            "2.0.0",
+
+        "status":
+            "running",
     }
 
 
 @app.get("/health")
-def health():
+async def health():
 
     return {
-        "status": "ok"
+
+        "status":
+            "ok",
     }
 
 
 @app.post("/ask")
-async def ask(data: dict):
+async def ask(
+    data: dict,
+):
 
     question = data.get(
         "question",
-        ""
+        "",
     ).strip()
+
+
+    connection_id = data.get(
+        "connection_id",
+        "",
+    ).strip()
+
 
     if not question:
 
         raise HTTPException(
+
             status_code=400,
-            detail="Question is required"
+
+            detail=(
+                "Question is required."
+            ),
         )
+
+
+    if not connection_id:
+
+        raise HTTPException(
+
+            status_code=400,
+
+            detail=(
+                "Database connection ID "
+                "is required."
+            ),
+        )
+
 
     try:
 
         return await ask_agent(
-            question
+
+            question,
+
+            connection_id,
         )
+
 
     except ValueError as error:
 
         raise HTTPException(
+
             status_code=400,
-            detail=str(error)
+
+            detail=str(error),
         )
+
 
     except Exception as error:
 
         print(
             "Agent error:",
-            error
+            error,
         )
 
         raise HTTPException(
+
             status_code=500,
+
             detail=(
                 "Something went wrong "
                 "while processing the request."
-            )
+            ),
         )
 
 
-@app.post("/approve/{request_id}")
-async def approve(request_id: str):
+@app.post(
+    "/approve/{request_id}"
+)
+async def approve(
+    request_id: str,
+):
 
     try:
 
@@ -99,31 +165,41 @@ async def approve(request_id: str):
             request_id
         )
 
+
     except ValueError as error:
 
         raise HTTPException(
+
             status_code=400,
-            detail=str(error)
+
+            detail=str(error),
         )
+
 
     except Exception as error:
 
         print(
-            "Approval execution error:",
-            error
+            "Approval error:",
+            error,
         )
 
         raise HTTPException(
+
             status_code=500,
+
             detail=(
                 "Failed to execute "
                 "approved modification."
-            )
+            ),
         )
 
 
-@app.post("/reject/{request_id}")
-async def reject(request_id: str):
+@app.post(
+    "/reject/{request_id}"
+)
+async def reject(
+    request_id: str,
+):
 
     try:
 
@@ -131,9 +207,29 @@ async def reject(request_id: str):
             request_id
         )
 
+
     except ValueError as error:
 
         raise HTTPException(
+
             status_code=400,
-            detail=str(error)
+
+            detail=str(error),
+        )
+
+
+    except Exception as error:
+
+        print(
+            "Rejection error:",
+            error,
+        )
+
+        raise HTTPException(
+
+            status_code=500,
+
+            detail=(
+                "Failed to reject request."
+            ),
         )

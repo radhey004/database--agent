@@ -1,12 +1,30 @@
 import json
+import logging
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import (
+    MCPServer,
+)
 
 from .database import (
+    connection_manager,
     get_schema,
     execute_query,
     preview_modification as preview_modification_db,
     execute_modification,
+)
+
+from .sql_validator import (
+    validate_read_sql,
+    validate_write_sql,
+)
+
+
+logging.basicConfig(
+    level=logging.INFO
+)
+
+logger = logging.getLogger(
+    "database-mcp"
 )
 
 
@@ -15,111 +33,324 @@ mcp = MCPServer(
 )
 
 
-@mcp.tool()
-def database_schema() -> str:
-    """Get the PostgreSQL database schema."""
-
-    print(
-        "MCP: database_schema called"
-    )
-
-    schema = get_schema()
-
-    print(
-        "MCP: schema:",
-        schema
-    )
-
-    return json.dumps(schema)
-
-
-@mcp.tool()
-def run_sql(query: str) -> str:
-    """Execute a read-only SELECT query."""
-
-    print(
-        "MCP: run_sql called:",
-        query
-    )
-
-    result = execute_query(
-        query
-    )
-
-    print(
-        "MCP: result:",
-        result
-    )
+def success(
+    data,
+):
 
     return json.dumps(
-        result,
-        default=str
+        {
+            "success": True,
+            **data,
+        },
+        default=str,
     )
+
+
+def failure(
+    error,
+    query=None,
+):
+
+    return json.dumps(
+        {
+            "success": False,
+
+            "error":
+                str(error),
+
+            "error_type":
+                type(error).__name__,
+
+            "retryable":
+                True,
+
+            **(
+                {
+                    "query": query
+                }
+                if query
+                else {}
+            ),
+        },
+        default=str,
+    )
+
+
+@mcp.tool()
+def connect_database(
+    database_url: str,
+) -> str:
+    """
+    Create a PostgreSQL connection session.
+
+    Returns only a connection ID and
+    safe database metadata.
+    """
+
+    try:
+
+        result = (
+            connection_manager
+            .create_connection(
+                database_url
+            )
+        )
+
+        return success({
+
+            "message":
+                "Database connected successfully.",
+
+            **result,
+        })
+
+    except Exception as error:
+
+        logger.exception(
+            "Database connection failed"
+        )
+
+        return failure(
+            error
+        )
+
+
+@mcp.tool()
+def disconnect_database(
+    connection_id: str,
+) -> str:
+    """
+    Destroy the PostgreSQL connection
+    session associated with this ID.
+    """
+
+    try:
+
+        connection_manager.disconnect(
+            connection_id
+        )
+
+        return success({
+
+            "message":
+                "Database disconnected successfully.",
+        })
+
+    except Exception as error:
+
+        logger.exception(
+            "Database disconnect failed"
+        )
+
+        return failure(
+            error
+        )
+
+
+@mcp.tool()
+def database_schema(
+    connection_id: str,
+) -> str:
+    """
+    Discover the schema of the user's
+    connected PostgreSQL database.
+    """
+
+    try:
+
+        schema = get_schema(
+            connection_id
+        )
+
+        return success({
+
+            "schema":
+                schema,
+        })
+
+    except Exception as error:
+
+        logger.exception(
+            "Schema discovery failed"
+        )
+
+        return failure(
+            error
+        )
+
+
+@mcp.tool()
+def run_sql(
+    connection_id: str,
+    query: str,
+) -> str:
+    """
+    Execute one validated read-only
+    SQL query.
+    """
+
+    try:
+
+        validate_read_sql(
+            query
+        )
+
+        rows = execute_query(
+            connection_id,
+            query,
+        )
+
+        return success({
+
+            "query":
+                query,
+
+            "row_count":
+                len(rows),
+
+            "rows":
+                rows,
+        })
+
+    except Exception as error:
+
+        logger.exception(
+            "SQL execution failed"
+        )
+
+        return failure(
+            error,
+            query,
+        )
 
 
 @mcp.tool()
 def preview_modification(
-    query: str
+    connection_id: str,
+    query: str,
 ) -> str:
     """
-    Preview a database modification without
-    committing the modification.
+    Preview a write operation without
+    executing it.
     """
 
-    print(
-        "MCP: preview_modification called:",
-        query
-    )
+    try:
 
-    result = preview_modification_db(
-        query
-    )
+        validate_write_sql(
+            query
+        )
 
-    print(
-        "MCP: preview:",
-        result
-    )
+        preview = (
+            preview_modification_db(
+                connection_id,
+                query,
+            )
+        )
 
-    return json.dumps(
-        result,
-        default=str
-    )
+        return success({
+
+            "query":
+                query,
+
+            "preview":
+                preview,
+        })
+
+    except Exception as error:
+
+        logger.exception(
+            "Modification preview failed"
+        )
+
+        return failure(
+            error,
+            query,
+        )
 
 
 @mcp.tool()
 def run_modification(
-    query: str
+    connection_id: str,
+    query: str,
 ) -> str:
     """
-    Execute a modification after human approval.
+    Execute an approved database
+    modification.
     """
 
-    print(
-        "MCP: run_modification called:",
-        query
-    )
+    try:
 
-    result = execute_modification(
-        query
-    )
+        validate_write_sql(
+            query
+        )
 
-    print(
-        "MCP: modification result:",
-        result
-    )
+        result = (
+            execute_modification(
+                connection_id,
+                query,
+            )
+        )
 
-    return json.dumps(
-        result,
-        default=str
-    )
+        return success({
+
+            "query":
+                query,
+
+            "result":
+                result,
+        })
+
+    except Exception as error:
+
+        logger.exception(
+            "Modification execution failed"
+        )
+
+        return failure(
+            error,
+            query,
+        )
+
+
+@mcp.tool()
+def database_health(
+    connection_id: str,
+) -> str:
+    """
+    Check whether a database session
+    is still active.
+    """
+
+    try:
+
+        connection_manager.get_connection_pool(
+            connection_id
+        )
+
+        return success({
+
+            "status":
+                "healthy",
+        })
+
+    except Exception as error:
+
+        return failure(
+            error
+        )
 
 
 if __name__ == "__main__":
 
     mcp.run(
+
         transport="streamable-http",
+
         host="127.0.0.1",
+
         port=9000,
+
         stateless_http=True,
+
         json_response=True,
     )

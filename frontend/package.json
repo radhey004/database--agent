@@ -8,9 +8,10 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "lucide-react": "^1.33.0",
     "react": "latest",
-    "react-dom": "latest"
-  },
-  "devDependencies": {}
+    "react-dom": "latest",
+    "react-router-dom": "^7.18.2",
+    "vite": "latest"
+  }
 }
