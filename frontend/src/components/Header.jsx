@@ -2,6 +2,7 @@ import {
   Database,
   ShieldCheck,
   LogOut,
+  User,
 } from "lucide-react";
 
 import {
@@ -11,21 +12,34 @@ import {
 
 import {
   disconnectDatabase as disconnectDatabaseApi,
+  logoutUser,
 } from "../api/client";
 
 import {
   useDatabase,
 } from "../context/DatabaseContext";
 
+import {
+  useAuth,
+} from "../context/AuthContext";
+
 
 function Header() {
+
   const navigate =
     useNavigate();
+
 
   const {
     database,
     disconnectDatabase,
   } = useDatabase();
+
+
+  const {
+    user,
+    logout,
+  } = useAuth();
 
 
   const handleDisconnect =
@@ -36,9 +50,11 @@ function Header() {
         if (
           database.connectionId
         ) {
+
           await disconnectDatabaseApi(
             database.connectionId
           );
+
         }
 
       } catch (error) {
@@ -50,20 +66,71 @@ function Header() {
 
       } finally {
 
-        /*
-          Always clear frontend session,
-          even if backend session has
-          already expired.
-        */
-
         disconnectDatabase();
 
         navigate("/");
+
       }
+
+    };
+
+
+  const handleLogout =
+    async () => {
+
+      try {
+
+        if (
+          database.connectionId
+        ) {
+
+          try {
+
+            await disconnectDatabaseApi(
+              database.connectionId
+            );
+
+          } catch (error) {
+
+            console.error(
+              "Database disconnect error:",
+              error
+            );
+
+          }
+
+        }
+
+
+        await logoutUser();
+
+      } catch (error) {
+
+        console.error(
+          "Logout error:",
+          error
+        );
+
+      } finally {
+
+        disconnectDatabase();
+
+        logout();
+
+        navigate(
+          "/login",
+          {
+            replace: true,
+          }
+        );
+
+      }
+
     };
 
 
   return (
+
     <header className="header">
 
       <Link
@@ -72,7 +139,11 @@ function Header() {
       >
 
         <div className="brand-icon">
-          <Database size={20} />
+
+          <Database
+            size={20}
+          />
+
         </div>
 
 
@@ -98,7 +169,11 @@ function Header() {
           className="icon-button"
           title="Security & Privacy"
         >
-          <ShieldCheck size={19} />
+
+          <ShieldCheck
+            size={19}
+          />
+
         </Link>
 
 
@@ -111,7 +186,9 @@ function Header() {
           }`}
         >
 
-          <span className="status-dot" />
+          <span
+            className="status-dot"
+          />
 
           {database.connected
             ? database.databaseName ||
@@ -125,10 +202,14 @@ function Header() {
 
           <button
             className="disconnect-button"
-            onClick={handleDisconnect}
+            onClick={
+              handleDisconnect
+            }
           >
 
-            <LogOut size={16} />
+            <LogOut
+              size={16}
+            />
 
             Disconnect
 
@@ -136,10 +217,48 @@ function Header() {
 
         )}
 
+
+        {user && (
+
+          <div className="user-menu">
+
+            <div className="user-info">
+
+              <User
+                size={16}
+              />
+
+              <span>
+                {user.email}
+              </span>
+
+            </div>
+
+
+            <button
+              className="logout-button"
+              onClick={
+                handleLogout
+              }
+              title="Logout"
+            >
+
+              <LogOut
+                size={16}
+              />
+
+            </button>
+
+          </div>
+
+        )}
+
       </div>
 
     </header>
+
   );
+
 }
 
 

@@ -1,4 +1,5 @@
 from fastapi import (
+    Depends,
     FastAPI,
     HTTPException,
 )
@@ -13,8 +14,21 @@ from .agent import (
     reject_approval,
 )
 
+from .auth_dependencies import (
+    get_current_user,
+)
+
 from .database_routes import (
     router as database_router,
+)
+
+from .auth_routes import (
+    router as auth_router,
+)
+
+from .mcp_client import (
+    set_mcp_user,
+    reset_mcp_user,
 )
 
 
@@ -42,6 +56,10 @@ app.add_middleware(
 
 
 app.include_router(
+    auth_router
+)
+
+app.include_router(
     database_router
 )
 
@@ -66,15 +84,18 @@ def home():
 async def health():
 
     return {
-
-        "status":
-            "ok",
+        "status": "ok"
     }
 
+
+# ============================================================
+# ASK
+# ============================================================
 
 @app.post("/ask")
 async def ask(
     data: dict,
+    user=Depends(get_current_user),
 ):
 
     question = data.get(
@@ -82,57 +103,45 @@ async def ask(
         "",
     ).strip()
 
-
     connection_id = data.get(
         "connection_id",
         "",
     ).strip()
 
-
     if not question:
 
         raise HTTPException(
-
             status_code=400,
-
-            detail=(
-                "Question is required."
-            ),
+            detail="Question is required.",
         )
-
 
     if not connection_id:
 
         raise HTTPException(
-
             status_code=400,
-
             detail=(
                 "Database connection ID "
                 "is required."
             ),
         )
 
+    context_token = set_mcp_user(
+        user["id"]
+    )
 
     try:
 
         return await ask_agent(
-
             question,
-
             connection_id,
         )
-
 
     except ValueError as error:
 
         raise HTTPException(
-
             status_code=400,
-
             detail=str(error),
         )
-
 
     except Exception as error:
 
@@ -142,39 +151,49 @@ async def ask(
         )
 
         raise HTTPException(
-
             status_code=500,
-
             detail=(
                 "Something went wrong "
                 "while processing the request."
             ),
         )
 
+    finally:
+
+        reset_mcp_user(
+            context_token
+        )
+
+
+# ============================================================
+# APPROVE
+# ============================================================
 
 @app.post(
     "/approve/{request_id}"
 )
 async def approve(
     request_id: str,
+    user=Depends(get_current_user),
 ):
+
+    context_token = set_mcp_user(
+        user["id"]
+    )
 
     try:
 
         return await approve_request(
-            request_id
+            request_id,
+            user["id"],
         )
-
 
     except ValueError as error:
 
         raise HTTPException(
-
             status_code=400,
-
             detail=str(error),
         )
-
 
     except Exception as error:
 
@@ -184,39 +203,49 @@ async def approve(
         )
 
         raise HTTPException(
-
             status_code=500,
-
             detail=(
                 "Failed to execute "
                 "approved modification."
             ),
         )
 
+    finally:
+
+        reset_mcp_user(
+            context_token
+        )
+
+
+# ============================================================
+# REJECT
+# ============================================================
 
 @app.post(
     "/reject/{request_id}"
 )
 async def reject(
     request_id: str,
+    user=Depends(get_current_user),
 ):
+
+    context_token = set_mcp_user(
+        user["id"]
+    )
 
     try:
 
         return reject_approval(
-            request_id
+            request_id,
+            user["id"],
         )
-
 
     except ValueError as error:
 
         raise HTTPException(
-
             status_code=400,
-
             detail=str(error),
         )
-
 
     except Exception as error:
 
@@ -226,10 +255,14 @@ async def reject(
         )
 
         raise HTTPException(
-
             status_code=500,
-
             detail=(
                 "Failed to reject request."
             ),
+        )
+
+    finally:
+
+        reset_mcp_user(
+            context_token
         )

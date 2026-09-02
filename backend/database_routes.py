@@ -2,15 +2,20 @@ import json
 
 from fastapi import (
     APIRouter,
+    Depends,
     HTTPException,
 )
 
-from pydantic import (
-    BaseModel,
+from pydantic import BaseModel
+
+from .auth_dependencies import (
+    get_current_user,
 )
 
 from .mcp_client import (
     call_tool,
+    set_mcp_user,
+    reset_mcp_user,
 )
 
 
@@ -27,153 +32,113 @@ class DatabaseConnectionRequest(
     database_url: str
 
 
+# ============================================================
+# MCP RESPONSE
+# ============================================================
+
 def extract_mcp_response(
     response,
 ):
 
-    print(
-        "Raw MCP response:",
-        response,
-    )
-
-    if not response:
-
-        raise ValueError(
-            "Empty response from MCP server."
+    if (
+        not response
+        or not hasattr(
+            response,
+            "content",
         )
-
-
-    if not hasattr(
-        response,
-        "content",
+        or not response.content
     ):
 
         raise ValueError(
-            f"Invalid MCP response: {response}"
+            "Invalid or empty MCP response."
         )
 
-
-    if not response.content:
-
-        raise ValueError(
-            "MCP server returned empty content."
-        )
-
-
-    content = response.content[0]
-
-    print(
-        "MCP content:",
-        content,
+    content = (
+        response.content[0]
     )
 
-
-    if hasattr(
-        content,
-        "text",
-    ):
-
-        text = content.text
-
-    elif isinstance(
-        content,
-        str,
-    ):
-
-        text = content
-
-    else:
-
-        text = str(
-            content
+    text = (
+        content.text
+        if hasattr(
+            content,
+            "text",
         )
-
-
-    print(
-        "MCP response text:",
-        repr(text),
+        else str(content)
     )
-
-
-    if not text:
-
-        raise ValueError(
-            "MCP response text is empty."
-        )
-
 
     return json.loads(
         text
     )
 
 
+# ============================================================
+# TEST DATABASE CONNECTION
+# ============================================================
+
 @router.post(
-    "/connect"
+    "/test-connection"
 )
-async def connect_database(
+async def test_database_connection(
     data: DatabaseConnectionRequest,
+    user=Depends(
+        get_current_user
+    ),
 ):
 
     database_url = (
         data.database_url.strip()
     )
 
-
     if not database_url:
 
         raise HTTPException(
-            status_code=400,
-            detail=(
-                "Database URL is required."
-            ),
+            400,
+            "Database URL is required.",
         )
 
+    token = set_mcp_user(
+        user["id"]
+    )
+
+    connection_id = None
 
     try:
 
-        response = await call_tool(
-            "connect_database",
-            {
-                "database_url":
-                    database_url,
-            },
-        )
-
-
-        result = (
-            extract_mcp_response(
-                response
+        result = extract_mcp_response(
+            await call_tool(
+                "connect_database",
+                {
+                    "database_url":
+                        database_url
+                },
             )
         )
-
 
         if not result.get(
             "success"
         ):
 
             raise HTTPException(
-                status_code=400,
-                detail=result.get(
+                400,
+                result.get(
                     "error",
-                    "Failed to connect database.",
+                    "Database connection failed.",
                 ),
             )
 
+        connection_id = (
+            result.get(
+                "connection_id"
+            )
+        )
 
         return {
 
-            "success": True,
+            "success":
+                True,
 
             "message":
-                result.get(
-                    "message",
-                    "Database connected successfully.",
-                ),
-
-            "connection_id":
-                result.get(
-                    "connection_id"
-                ),
+                "Database connection test successful.",
 
             "database_name":
                 result.get(
@@ -191,197 +156,16 @@ async def connect_database(
                 ),
         }
 
-
     except HTTPException:
 
         raise
 
-
     except Exception as error:
 
-        print(
-            "Database connection error:",
-            repr(error),
-        )
-
         raise HTTPException(
-            status_code=500,
-            detail=(
-                "Failed to connect "
-                "to the database."
-            ),
+            500,
+            "Failed to test database connection.",
         )
-
-
-@router.post(
-    "/disconnect/{connection_id}"
-)
-async def disconnect_database(
-    connection_id: str,
-):
-
-    try:
-
-        response = await call_tool(
-            "disconnect_database",
-            {
-                "connection_id":
-                    connection_id,
-            },
-        )
-
-
-        result = (
-            extract_mcp_response(
-                response
-            )
-        )
-
-
-        if not result.get(
-            "success"
-        ):
-
-            raise HTTPException(
-                status_code=400,
-                detail=result.get(
-                    "error",
-                    "Failed to disconnect database.",
-                ),
-            )
-
-
-        return {
-
-            "success": True,
-
-            "message":
-                result.get(
-                    "message",
-                    "Database disconnected successfully.",
-                ),
-        }
-
-
-    except HTTPException:
-
-        raise
-
-
-    except Exception as error:
-
-        print(
-            "Database disconnect error:",
-            repr(error),
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Failed to disconnect "
-                "database."
-            ),
-        )
-
-
-@router.post(
-    "/test-connection"
-)
-async def test_connection(
-    data: DatabaseConnectionRequest,
-):
-
-    database_url = (
-        data.database_url.strip()
-    )
-
-
-    if not database_url:
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Database URL is required."
-            ),
-        )
-
-
-    connection_id = None
-
-
-    try:
-
-        response = await call_tool(
-            "connect_database",
-            {
-                "database_url":
-                    database_url,
-            },
-        )
-
-
-        result = (
-            extract_mcp_response(
-                response
-            )
-        )
-
-
-        if not result.get(
-            "success"
-        ):
-
-            raise HTTPException(
-                status_code=400,
-                detail=result.get(
-                    "error",
-                    "Database connection failed.",
-                ),
-            )
-
-
-        connection_id = result.get(
-            "connection_id"
-        )
-
-
-        return {
-
-            "success": True,
-
-            "message":
-                result.get(
-                    "message",
-                    "Database connected successfully.",
-                ),
-
-            "version":
-                result.get(
-                    "version"
-                ),
-        }
-
-
-    except HTTPException:
-
-        raise
-
-
-    except Exception as error:
-
-        print(
-            "Database test error:",
-            repr(error),
-        )
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Failed to test "
-                "database connection."
-            ),
-        )
-
 
     finally:
 
@@ -393,13 +177,218 @@ async def test_connection(
                     "disconnect_database",
                     {
                         "connection_id":
-                            connection_id,
+                            connection_id
                     },
                 )
 
-            except Exception as error:
+            except Exception:
 
-                print(
-                    "Cleanup error:",
-                    repr(error),
-                )
+                pass
+
+        reset_mcp_user(
+            token
+        )
+
+
+# ============================================================
+# CONNECT DATABASE
+# ============================================================
+
+@router.post(
+    "/connect"
+)
+async def connect_database(
+    data: DatabaseConnectionRequest,
+    user=Depends(
+        get_current_user
+    ),
+):
+
+    database_url = (
+        data.database_url.strip()
+    )
+
+    if not database_url:
+
+        raise HTTPException(
+            400,
+            "Database URL is required.",
+        )
+
+    token = set_mcp_user(
+        user["id"]
+    )
+
+    try:
+
+        result = extract_mcp_response(
+            await call_tool(
+                "connect_database",
+                {
+                    "database_url":
+                        database_url
+                },
+            )
+        )
+
+        if not result.get(
+            "success"
+        ):
+
+            raise HTTPException(
+                400,
+                result.get(
+                    "error",
+                    "Failed to connect database.",
+                ),
+            )
+
+        return result
+
+    except HTTPException:
+
+        raise
+
+    except Exception:
+
+        raise HTTPException(
+            500,
+            "Failed to connect to the database.",
+        )
+
+    finally:
+
+        reset_mcp_user(
+            token
+        )
+
+
+# ============================================================
+# CURRENT CONNECTION
+# ============================================================
+
+@router.get(
+    "/current/{connection_id}"
+)
+async def current_database_connection(
+    connection_id: str,
+    user=Depends(
+        get_current_user
+    ),
+):
+
+    if not connection_id:
+
+        raise HTTPException(
+            400,
+            "Connection ID is required.",
+        )
+
+    token = set_mcp_user(
+        user["id"]
+    )
+
+    try:
+
+        result = extract_mcp_response(
+            await call_tool(
+                "current_database_connection",
+                {
+                    "connection_id":
+                        connection_id
+                },
+            )
+        )
+
+        if not result.get(
+            "success"
+        ):
+
+            # The frontend should not interpret
+            # every MCP failure as an explicit disconnect.
+
+            raise HTTPException(
+                404,
+                "Database connection is no longer available.",
+            )
+
+        return result
+
+    except HTTPException:
+
+        raise
+
+    except Exception:
+
+        raise HTTPException(
+            503,
+            "Database connection verification temporarily failed.",
+        )
+
+    finally:
+
+        reset_mcp_user(
+            token
+        )
+
+
+# ============================================================
+# DISCONNECT
+# ============================================================
+
+@router.post(
+    "/disconnect/{connection_id}"
+)
+async def disconnect_database(
+    connection_id: str,
+    user=Depends(
+        get_current_user
+    ),
+):
+
+    token = set_mcp_user(
+        user["id"]
+    )
+
+    try:
+
+        result = extract_mcp_response(
+            await call_tool(
+                "disconnect_database",
+                {
+                    "connection_id":
+                        connection_id
+                },
+            )
+        )
+
+        if not result.get(
+            "success"
+        ):
+
+            raise HTTPException(
+                400,
+                result.get(
+                    "error",
+                    "Failed to disconnect database.",
+                ),
+            )
+
+        return result
+
+    except HTTPException:
+
+        raise
+
+    except Exception:
+
+        raise HTTPException(
+            500,
+            "Failed to disconnect database.",
+        )
+
+    finally:
+
+        reset_mcp_user(
+            token
+        )

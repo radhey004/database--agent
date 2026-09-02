@@ -1,5 +1,4 @@
 import json
-import uuid
 
 from typing import (
     Literal,
@@ -47,7 +46,17 @@ from .sql_validator import (
 from .query_validator import (
     validate_query_intent,
 )
+from .approval_store import (
+    create_approval_request,
+    get_pending_approval,
+    claim_approval_request,
+    mark_approval_failed,
+    reject_approval_request,
+)
 
+# ============================================================
+# STATE
+# ============================================================
 
 class State(
     TypedDict,
@@ -81,6 +90,10 @@ class State(
     request_id: str
 
 
+# ============================================================
+# INTENT MODEL
+# ============================================================
+
 class Intent(
     BaseModel
 ):
@@ -91,6 +104,10 @@ class Intent(
         "unrelated",
     ]
 
+
+# ============================================================
+# MODELS
+# ============================================================
 
 groq = ChatGroq(
     model="openai/gpt-oss-120b",
@@ -104,10 +121,6 @@ ollama = ChatOllama(
     base_url=OLLAMA_URL,
     temperature=0,
 )
-
-
-pending_requests = {}
-
 
 # ============================================================
 # HELPERS
@@ -466,9 +479,11 @@ async def answer_schema_question(
     ):
 
         return {
+
             "sql": "",
 
             "result": {
+
                 "success": True,
 
                 "row_count": 1,
@@ -494,9 +509,11 @@ async def answer_schema_question(
     ):
 
         return {
+
             "sql": "",
 
             "result": {
+
                 "success": True,
 
                 "row_count":
@@ -505,10 +522,12 @@ async def answer_schema_question(
                     ),
 
                 "rows": [
+
                     {
                         "table_name":
                             table_name
                     }
+
                     for table_name
                     in table_names
                 ],
@@ -545,6 +564,7 @@ async def answer_schema_question(
 
                 rows.append(
                     {
+
                         "table_name":
                             table_name,
 
@@ -578,9 +598,11 @@ async def answer_schema_question(
                 )
 
         return {
+
             "sql": "",
 
             "result": {
+
                 "success": True,
 
                 "row_count":
@@ -623,6 +645,7 @@ async def answer_schema_question(
 
             rows.append(
                 {
+
                     "column_name":
                         column.get(
                             "name",
@@ -653,9 +676,11 @@ async def answer_schema_question(
             )
 
         return {
+
             "sql": "",
 
             "result": {
+
                 "success": True,
 
                 "table":
@@ -695,6 +720,7 @@ async def answer_schema_question(
         )
 
         rows = [
+
             {
                 "table_name":
                     table_name,
@@ -702,13 +728,16 @@ async def answer_schema_question(
                 "primary_key":
                     key,
             }
+
             for key in primary_keys
         ]
 
         return {
+
             "sql": "",
 
             "result": {
+
                 "success": True,
 
                 "table":
@@ -725,6 +754,7 @@ async def answer_schema_question(
         }
 
     return {
+
         "error":
             "Unable to answer "
             "the schema question.",
@@ -943,7 +973,9 @@ async def generate_sql(
             )
 
         return {
-            "sql": sql,
+
+            "sql":
+                sql,
 
             "sql_error":
                 str(
@@ -955,9 +987,12 @@ async def generate_sql(
         }
 
     return {
-        "sql": sql,
 
-        "sql_error": "",
+        "sql":
+            sql,
+
+        "sql_error":
+            "",
     }
 
 
@@ -1046,6 +1081,7 @@ async def execute_read_sql(
             )
 
         return {
+
             "sql_error":
                 data.get(
                     "error",
@@ -1057,9 +1093,12 @@ async def execute_read_sql(
         }
 
     return {
-        "result": data,
 
-        "sql_error": "",
+        "result":
+            data,
+
+        "sql_error":
+            "",
     }
 
 
@@ -1124,34 +1163,13 @@ async def request_approval(
             )
         )
 
-    request_id = str(
-        uuid.uuid4()
-    )
+    return {
 
-    pending_requests[
-        request_id
-    ] = {
-        "connection_id":
-            state["connection_id"],
+        "approval_required":
+            True,
 
         "sql":
             state["sql"],
-
-        "question":
-            state["question"],
-
-        "intent":
-            state["intent"],
-
-        "preview":
-            data["preview"],
-    }
-
-    return {
-        "approval_required": True,
-
-        "request_id":
-            request_id,
 
         "preview":
             data["preview"],
@@ -1167,6 +1185,7 @@ async def reject_request(
 ):
 
     return {
+
         "error": (
             "This request is not related "
             "to the connected database."
@@ -1362,12 +1381,15 @@ async def ask_agent(
 
     result = await agent.ainvoke(
         {
-            "question": question,
+
+            "question":
+                question,
 
             "connection_id":
                 connection_id,
 
-            "retry_count": 0,
+            "retry_count":
+                0,
         }
     )
 
@@ -1379,28 +1401,73 @@ async def ask_agent(
             result["error"]
         )
 
+    # ========================================================
+    # WRITE OPERATION
+    # ========================================================
+
     if result.get(
         "approval_required"
     ):
 
+        from .mcp_client import (
+            get_mcp_user,
+        )
+
+        user_id = get_mcp_user()
+
+        if not user_id:
+
+            raise ValueError(
+                "Authenticated user context "
+                "is missing."
+            )
+
+        approval = (
+            create_approval_request(
+
+                user_id=user_id,
+
+                connection_id=
+                    connection_id,
+
+                question=
+                    question,
+
+                sql=
+                    result["sql"],
+
+                preview=
+                    result["preview"],
+            )
+        )
+
         return {
+
             "status":
                 "pending_approval",
 
             "request_id":
-                result["request_id"],
+                approval["id"],
 
             "question":
-                question,
+                approval["question"],
 
             "sql":
-                result["sql"],
+                approval["sql"],
 
             "preview":
-                result["preview"],
+                approval["preview"],
+
+            "created_at":
+                approval["created_at"],
         }
 
+    # ========================================================
+    # READ OPERATION
+    # ========================================================
+
     return {
+
         "status":
             "completed",
 
@@ -1414,9 +1481,14 @@ async def ask_agent(
             result.get(
                 "result",
                 {
-                    "success": True,
-                    "row_count": 0,
-                    "rows": [],
+                    "success":
+                        True,
+
+                    "row_count":
+                        0,
+
+                    "rows":
+                        [],
                 },
             ),
     }
@@ -1428,67 +1500,110 @@ async def ask_agent(
 
 async def approve_request(
     request_id: str,
+    user_id: str,
 ):
 
-    request = pending_requests.get(
-        request_id
+    if not user_id:
+
+        raise ValueError(
+            "Authenticated user is required."
+        )
+
+    # ========================================================
+    # ATOMIC CLAIM
+    # ========================================================
+
+    request = (
+        claim_approval_request(
+            request_id,
+            user_id,
+        )
     )
 
     if not request:
 
         raise ValueError(
-            "Approval request not found "
-            "or expired."
+            "Approval request was not found, "
+            "does not belong to this user, "
+            "or has already been processed."
         )
 
-    response = await call_tool(
-        "run_modification",
-        {
-            "connection_id":
-                request["connection_id"],
+    try:
 
-            "query":
-                request["sql"],
-        },
-    )
+        response = await call_tool(
+            "run_modification",
+            {
+                "connection_id":
+                    request["connection_id"],
 
-    data = json.loads(
-        content_to_text(
-            response.content[0]
+                "query":
+                    request["sql"],
+            },
         )
-    )
 
-    if not data.get(
-        "success"
-    ):
-
-        raise ValueError(
-            data.get(
-                "error",
-                "Modification failed.",
+        data = json.loads(
+            content_to_text(
+                response.content[0]
             )
         )
 
-    del pending_requests[
-        request_id
-    ]
+        if not data.get(
+            "success"
+        ):
 
-    return {
-        "status":
-            "approved_and_executed",
+            mark_approval_failed(
+                request_id,
+                user_id,
+            )
 
-        "sql":
-            request["sql"],
+            raise ValueError(
+                data.get(
+                    "error",
+                    "Modification failed.",
+                )
+            )
 
-        "preview":
-            request["preview"],
+        return {
 
-        "result":
-            data.get(
-                "result",
-                data,
-            ),
-    }
+            "status":
+                "approved_and_executed",
+
+            "request_id":
+                request_id,
+
+            "sql":
+                request["sql"],
+
+            "preview":
+                request["preview"],
+
+            "result":
+                data.get(
+                    "result",
+                    data,
+                ),
+        }
+
+    except Exception:
+
+        # ----------------------------------------------------
+        # If execution fails after claiming approval,
+        # preserve the request as failed rather than leaving
+        # it in an inconsistent pending state.
+        # ----------------------------------------------------
+
+        try:
+
+            mark_approval_failed(
+                request_id,
+                user_id,
+            )
+
+        except Exception:
+
+            pass
+
+        raise
 
 
 # ============================================================
@@ -1497,23 +1612,37 @@ async def approve_request(
 
 def reject_approval(
     request_id: str,
+    user_id: str,
 ):
 
-    request = pending_requests.pop(
-        request_id,
-        None,
+    if not user_id:
+
+        raise ValueError(
+            "Authenticated user is required."
+        )
+
+    request = (
+        reject_approval_request(
+            request_id,
+            user_id,
+        )
     )
 
     if not request:
 
         raise ValueError(
-            "Approval request not found "
-            "or expired."
+            "Approval request was not found, "
+            "does not belong to this user, "
+            "or has already been processed."
         )
 
     return {
+
         "status":
             "rejected",
+
+        "request_id":
+            request_id,
 
         "sql":
             request["sql"],

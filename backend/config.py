@@ -3,17 +3,72 @@ import os
 from dotenv import load_dotenv
 
 
-# Load variables from .env
 load_dotenv()
 
 
 # ============================================================
-# DATABASE
+# APPLICATION DATABASE
 # ============================================================
 
-DATABASE_URL = os.getenv(
+AUTH_DATABASE_URL = os.getenv(
+    "AUTH_DATABASE_URL"
+) or os.getenv(
     "DATABASE_URL"
 )
+
+# ============================================================
+# AUTHENTICATION
+# ============================================================
+
+JWT_SECRET_KEY = os.getenv(
+    "JWT_SECRET_KEY",
+    "change-this-development-secret",
+)
+
+JWT_ALGORITHM = os.getenv(
+    "JWT_ALGORITHM",
+    "HS256",
+)
+
+JWT_EXPIRE_DAYS = int(
+    os.getenv(
+        "JWT_EXPIRE_DAYS",
+        "7",
+    )
+)
+
+AUTH_COOKIE_NAME = os.getenv(
+    "AUTH_COOKIE_NAME",
+    "dbagent_session",
+)
+
+AUTH_COOKIE_SECURE = (
+    os.getenv(
+        "AUTH_COOKIE_SECURE",
+        "false",
+    ).lower()
+    == "true"
+)
+
+TERMS_VERSION = os.getenv(
+    "TERMS_VERSION",
+    "1.0",
+)
+
+
+# ============================================================
+# MCP INTERNAL AUTHENTICATION
+# ============================================================
+
+MCP_INTERNAL_SECRET = os.getenv(
+    "MCP_INTERNAL_SECRET"
+)
+
+if not MCP_INTERNAL_SECRET:
+
+    raise RuntimeError(
+        "MCP_INTERNAL_SECRET is not configured."
+    )
 
 
 # ============================================================
@@ -51,7 +106,7 @@ MCP_SERVER_URL = os.getenv(
 
 
 # ============================================================
-# AGENT CONFIGURATION
+# AGENT
 # ============================================================
 
 MAX_SQL_RETRIES = int(

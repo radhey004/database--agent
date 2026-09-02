@@ -1,9 +1,7 @@
 import json
 import logging
 
-from mcp.server.mcpserver import (
-    MCPServer,
-)
+from mcp.server.mcpserver import MCPServer
 
 from .database import (
     connection_manager,
@@ -11,6 +9,10 @@ from .database import (
     execute_query,
     preview_modification as preview_modification_db,
     execute_modification,
+)
+
+from .mcp_auth import (
+    verify_mcp_context,
 )
 
 from .sql_validator import (
@@ -33,9 +35,11 @@ mcp = MCPServer(
 )
 
 
-def success(
-    data,
-):
+# ============================================================
+# RESPONSE HELPERS
+# ============================================================
+
+def success(data):
 
     return json.dumps(
         {
@@ -66,7 +70,8 @@ def failure(
 
             **(
                 {
-                    "query": query
+                    "query":
+                        query
                 }
                 if query
                 else {}
@@ -76,33 +81,79 @@ def failure(
     )
 
 
+# ============================================================
+# AUTHENTICATION
+# ============================================================
+
+def authenticate_mcp_request(
+    mcp_context: str,
+):
+
+    return verify_mcp_context(
+        mcp_context
+    )
+
+
+# ============================================================
+# CONNECT DATABASE
+# ============================================================
+
 @mcp.tool()
 def connect_database(
     database_url: str,
+    mcp_context: str,
 ) -> str:
-    """
-    Create a PostgreSQL connection session.
-
-    Returns only a connection ID and
-    safe database metadata.
-    """
 
     try:
+
+        context = (
+            authenticate_mcp_request(
+                mcp_context
+            )
+        )
+
+        user_id = (
+            context["user_id"]
+        )
 
         result = (
             connection_manager
             .create_connection(
-                database_url
+                database_url,
+                user_id,
             )
         )
 
-        return success({
+        logger.info(
+            "Database connected: user=%s connection=%s",
+            user_id,
+            result["connection_id"],
+        )
 
-            "message":
-                "Database connected successfully.",
+        return success(
+            {
+                "message":
+                    "Database connected successfully.",
 
-            **result,
-        })
+                "connection_id":
+                    result["connection_id"],
+
+                "database_name":
+                    result.get(
+                        "database_name"
+                    ),
+
+                "host":
+                    result.get(
+                        "host"
+                    ),
+
+                "version":
+                    result.get(
+                        "version"
+                    ),
+            }
+        )
 
     except Exception as error:
 
@@ -115,26 +166,45 @@ def connect_database(
         )
 
 
+# ============================================================
+# DISCONNECT DATABASE
+# ============================================================
+
 @mcp.tool()
 def disconnect_database(
     connection_id: str,
+    mcp_context: str,
 ) -> str:
-    """
-    Destroy the PostgreSQL connection
-    session associated with this ID.
-    """
 
     try:
 
-        connection_manager.disconnect(
-            connection_id
+        context = (
+            authenticate_mcp_request(
+                mcp_context
+            )
         )
 
-        return success({
+        user_id = (
+            context["user_id"]
+        )
 
-            "message":
-                "Database disconnected successfully.",
-        })
+        connection_manager.disconnect(
+            connection_id,
+            user_id,
+        )
+
+        logger.info(
+            "Database disconnected: user=%s connection=%s",
+            user_id,
+            connection_id,
+        )
+
+        return success(
+            {
+                "message":
+                    "Database disconnected successfully."
+            }
+        )
 
     except Exception as error:
 
@@ -147,26 +217,84 @@ def disconnect_database(
         )
 
 
+# ============================================================
+# CURRENT DATABASE CONNECTION
+# ============================================================
+
 @mcp.tool()
-def database_schema(
+def current_database_connection(
     connection_id: str,
+    mcp_context: str,
 ) -> str:
-    """
-    Discover the schema of the user's
-    connected PostgreSQL database.
-    """
 
     try:
 
-        schema = get_schema(
-            connection_id
+        context = (
+            authenticate_mcp_request(
+                mcp_context
+            )
         )
 
-        return success({
+        user_id = (
+            context["user_id"]
+        )
 
-            "schema":
-                schema,
-        })
+        info = (
+            connection_manager
+            .get_connection_info(
+                connection_id,
+                user_id,
+            )
+        )
+
+        return success(
+            info
+        )
+
+    except Exception as error:
+
+        logger.exception(
+            "Current database connection lookup failed"
+        )
+
+        return failure(
+            error
+        )
+
+
+# ============================================================
+# DATABASE SCHEMA
+# ============================================================
+
+@mcp.tool()
+def database_schema(
+    connection_id: str,
+    mcp_context: str,
+) -> str:
+
+    try:
+
+        context = (
+            authenticate_mcp_request(
+                mcp_context
+            )
+        )
+
+        user_id = (
+            context["user_id"]
+        )
+
+        schema = get_schema(
+            connection_id,
+            user_id,
+        )
+
+        return success(
+            {
+                "schema":
+                    schema
+            }
+        )
 
     except Exception as error:
 
@@ -179,17 +307,28 @@ def database_schema(
         )
 
 
+# ============================================================
+# READ SQL
+# ============================================================
+
 @mcp.tool()
 def run_sql(
     connection_id: str,
     query: str,
+    mcp_context: str,
 ) -> str:
-    """
-    Execute one validated read-only
-    SQL query.
-    """
 
     try:
+
+        context = (
+            authenticate_mcp_request(
+                mcp_context
+            )
+        )
+
+        user_id = (
+            context["user_id"]
+        )
 
         validate_read_sql(
             query
@@ -198,19 +337,21 @@ def run_sql(
         rows = execute_query(
             connection_id,
             query,
+            user_id,
         )
 
-        return success({
+        return success(
+            {
+                "query":
+                    query,
 
-            "query":
-                query,
+                "row_count":
+                    len(rows),
 
-            "row_count":
-                len(rows),
-
-            "rows":
-                rows,
-        })
+                "rows":
+                    rows,
+            }
+        )
 
     except Exception as error:
 
@@ -224,17 +365,28 @@ def run_sql(
         )
 
 
+# ============================================================
+# PREVIEW MODIFICATION
+# ============================================================
+
 @mcp.tool()
 def preview_modification(
     connection_id: str,
     query: str,
+    mcp_context: str,
 ) -> str:
-    """
-    Preview a write operation without
-    executing it.
-    """
 
     try:
+
+        context = (
+            authenticate_mcp_request(
+                mcp_context
+            )
+        )
+
+        user_id = (
+            context["user_id"]
+        )
 
         validate_write_sql(
             query
@@ -244,17 +396,19 @@ def preview_modification(
             preview_modification_db(
                 connection_id,
                 query,
+                user_id,
             )
         )
 
-        return success({
+        return success(
+            {
+                "query":
+                    query,
 
-            "query":
-                query,
-
-            "preview":
-                preview,
-        })
+                "preview":
+                    preview,
+            }
+        )
 
     except Exception as error:
 
@@ -268,17 +422,28 @@ def preview_modification(
         )
 
 
+# ============================================================
+# RUN MODIFICATION
+# ============================================================
+
 @mcp.tool()
 def run_modification(
     connection_id: str,
     query: str,
+    mcp_context: str,
 ) -> str:
-    """
-    Execute an approved database
-    modification.
-    """
 
     try:
+
+        context = (
+            authenticate_mcp_request(
+                mcp_context
+            )
+        )
+
+        user_id = (
+            context["user_id"]
+        )
 
         validate_write_sql(
             query
@@ -288,17 +453,19 @@ def run_modification(
             execute_modification(
                 connection_id,
                 query,
+                user_id,
             )
         )
 
-        return success({
+        return success(
+            {
+                "query":
+                    query,
 
-            "query":
-                query,
-
-            "result":
-                result,
-        })
+                "result":
+                    result,
+            }
+        )
 
     except Exception as error:
 
@@ -312,45 +479,69 @@ def run_modification(
         )
 
 
+# ============================================================
+# DATABASE HEALTH
+# ============================================================
+
 @mcp.tool()
 def database_health(
     connection_id: str,
+    mcp_context: str,
 ) -> str:
-    """
-    Check whether a database session
-    is still active.
-    """
 
     try:
 
-        connection_manager.get_connection_pool(
-            connection_id
+        context = (
+            authenticate_mcp_request(
+                mcp_context
+            )
         )
 
-        return success({
+        user_id = (
+            context["user_id"]
+        )
 
-            "status":
-                "healthy",
-        })
+        connection_manager.verify_owner(
+            connection_id,
+            user_id,
+        )
+
+        return success(
+            {
+                "status":
+                    "healthy"
+            }
+        )
 
     except Exception as error:
+
+        logger.exception(
+            "Database health check failed"
+        )
 
         return failure(
             error
         )
 
 
+# ============================================================
+# SERVER
+# ============================================================
+
 if __name__ == "__main__":
 
+    logger.info(
+        "Starting stateful Database MCP server..."
+    )
+
+    logger.info(
+        "Database credentials are held only in memory."
+    )
+
     mcp.run(
-
         transport="streamable-http",
-
         host="127.0.0.1",
-
         port=9000,
-
-        stateless_http=True,
-
+        stateless_http=False,
         json_response=True,
     )

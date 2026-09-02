@@ -10,3 +10,7 @@ langsmith
 mcp
 pytest
 sqlglot
+bcrypt
+PyJWT
+email-validator
+cryptography

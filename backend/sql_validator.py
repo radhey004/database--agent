@@ -227,22 +227,23 @@ def validate_schema_usage(
     Verify that referenced tables and columns
     exist in the discovered schema.
 
-    CREATE statements are handled separately
-    because the target object may not exist yet.
+    Supports SQL table aliases such as:
+
+        FROM users u
+        JOIN orders o
+            ON o.user_id = u.id
     """
 
     _, ast = parse_single_statement(
         query
     )
 
-    # CREATE TABLE / VIEW / INDEX etc.
-    # creates a new object, so its target
-    # must not be required to already exist.
+    # CREATE statements are handled separately
+    # because the target object may not exist yet.
     if isinstance(
         ast,
         exp.Create,
     ):
-
         return True
 
     if not schema:
@@ -250,6 +251,10 @@ def validate_schema_usage(
         raise ValueError(
             "Database schema is empty."
         )
+
+    # --------------------------------------------------------
+    # BUILD SCHEMA MAP
+    # --------------------------------------------------------
 
     table_columns = {}
 
@@ -274,6 +279,20 @@ def validate_schema_usage(
         table_columns.keys()
     )
 
+    # --------------------------------------------------------
+    # BUILD TABLE ALIAS MAP
+    #
+    # users u
+    # orders o
+    #
+    # becomes:
+    #
+    # u -> users
+    # o -> orders
+    # --------------------------------------------------------
+
+    table_aliases = {}
+
     referenced_tables = set()
 
     for table in ast.find_all(
@@ -287,6 +306,25 @@ def validate_schema_usage(
         referenced_tables.add(
             table_name
         )
+
+        if table_name not in known_tables:
+
+            raise ValueError(
+                f"Unknown table: "
+                f"'{table_name}'"
+            )
+
+        alias = table.alias
+
+        if alias:
+
+            table_aliases[
+                alias.lower()
+            ] = table_name
+
+    # --------------------------------------------------------
+    # CHECK REAL TABLE REFERENCES
+    # --------------------------------------------------------
 
     unknown_tables = (
         referenced_tables
@@ -304,6 +342,31 @@ def validate_schema_usage(
             )
         )
 
+    # --------------------------------------------------------
+    # CHECK COLUMNS
+    # --------------------------------------------------------
+          # --------------------------------------------------------
+    # COLLECT SELECT-LEVEL ALIASES
+    # --------------------------------------------------------
+
+    query_aliases = set()
+
+    for alias in ast.find_all(
+        exp.Alias
+    ):
+
+        alias_name = alias.alias
+
+        if alias_name:
+
+            query_aliases.add(
+                alias_name.lower()
+            )
+
+    # --------------------------------------------------------
+    # CHECK COLUMNS
+    # --------------------------------------------------------
+
     for column in ast.find_all(
         exp.Column
     ):
@@ -316,6 +379,17 @@ def validate_schema_usage(
 
             continue
 
+        # Allow query-generated aliases such as:
+        # COUNT(o.id) AS order_count
+        # ORDER BY order_count DESC
+
+        if (
+            not column.table
+            and column_name in query_aliases
+        ):
+
+            continue
+
         table_name = (
             column.table.lower()
             if column.table
@@ -324,7 +398,14 @@ def validate_schema_usage(
 
         if table_name:
 
-            if table_name not in (
+            actual_table = (
+                table_aliases.get(
+                    table_name,
+                    table_name,
+                )
+            )
+
+            if actual_table not in (
                 table_columns
             ):
 
@@ -335,14 +416,14 @@ def validate_schema_usage(
 
             if column_name not in (
                 table_columns[
-                    table_name
+                    actual_table
                 ]
             ):
 
                 raise ValueError(
                     f"Unknown column "
                     f"'{column.name}' in "
-                    f"table '{table_name}'"
+                    f"table '{actual_table}'"
                 )
 
         else:
@@ -363,5 +444,3 @@ def validate_schema_usage(
                     f"Unknown column: "
                     f"'{column.name}'"
                 )
-
-    return True

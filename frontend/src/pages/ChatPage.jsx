@@ -12,21 +12,25 @@ import {
   useDatabase,
 } from "../context/DatabaseContext";
 
+import {
+  useChat,
+} from "../context/ChatContext";
+
 import ChatInput from "../components/ChatInput";
 import ChatMessage from "../components/ChatMessage";
 
 
 function ChatPage() {
-
   const {
     database,
   } = useDatabase();
 
 
-  const [
+  const {
     messages,
-    setMessages,
-  ] = useState([]);
+    addMessage,
+    removeApprovalRequest,
+  } = useChat();
 
 
   const [
@@ -41,290 +45,184 @@ function ChatPage() {
   ] = useState(false);
 
 
-  const addMessage = (
-    message
-  ) => {
+  // ============================================================
+  // ASK
+  // ============================================================
 
-    setMessages(
-      (previous) => [
-        ...previous,
-        message,
-      ]
-    );
+  const handleAsk =
+    async (question) => {
+      if (
+        !database.connected ||
+        !database.connectionId
+      ) {
+        addMessage({
+          role: "agent",
+          text:
+            "Please connect a PostgreSQL database before asking a question.",
+        });
 
-  };
+        return;
+      }
 
-
-  /*
-    Remove the approval panel after
-    Approve or Reject succeeds.
-  */
-
-  const removeApprovalRequest = (
-    requestId
-  ) => {
-
-    setMessages(
-      (previous) =>
-        previous.map(
-          (message) => {
-
-            if (
-              message.requestId ===
-              requestId
-            ) {
-
-              return {
-                ...message,
-
-                approvalRequired: false,
-              };
-
-            }
-
-            return message;
-
-          }
-        )
-    );
-
-  };
-
-
-  const handleAsk = async (
-    question
-  ) => {
-
-    if (
-      !database.connected ||
-      !database.connectionId
-    ) {
 
       addMessage({
-        role: "agent",
-
-        text:
-          "Please connect a PostgreSQL database before asking a question.",
+        role: "user",
+        text: question,
       });
 
-      return;
 
-    }
-
-
-    addMessage({
-      role: "user",
-      text: question,
-    });
+      setLoading(true);
 
 
-    setLoading(true);
+      try {
+        const response =
+          await askAgent(
+            question,
+            database.connectionId
+          );
 
 
-    try {
-
-      const response =
-        await askAgent(
-          question,
-          database.connectionId
-        );
+        const approvalRequired =
+          response.status ===
+            "pending_approval" ||
+          response.approval_required ===
+            true;
 
 
-      /*
-        Support both backend formats:
+        addMessage({
+          role: "agent",
 
-        {
-          status: "pending_approval"
-        }
+          text:
+            response.answer ||
+            response.message ||
+            (
+              approvalRequired
+                ? "This operation requires your approval."
+                : ""
+            ),
 
-        OR
+          sql:
+            response.sql ||
+            response.generated_sql ||
+            "",
 
-        {
-          approval_required: true
-        }
-      */
+          result:
+            response.result ||
+            response.rows ||
+            null,
 
-      const approvalRequired =
-        response.status ===
-          "pending_approval" ||
-        response.approval_required ===
-          true;
+          preview:
+            response.preview ||
+            null,
 
-
-      addMessage({
-
-        role: "agent",
-
-        text:
-          response.answer ||
-          response.message ||
-          (
-            approvalRequired
-              ? "This operation requires your approval."
-              : ""
-          ),
-
-        sql:
-          response.sql ||
-          response.generated_sql ||
-          "",
-
-        result:
-          response.result ||
-          response.rows ||
-          null,
-
-        preview:
-          response.preview ||
-          null,
-
-        approvalRequired:
           approvalRequired,
 
-        requestId:
-          response.request_id ||
-          response.requestId ||
-          null,
+          requestId:
+            response.request_id ||
+            response.requestId ||
+            null,
+        });
+      } catch (error) {
+        addMessage({
+          role: "agent",
 
-      });
-
-    } catch (error) {
-
-      addMessage({
-
-        role: "agent",
-
-        text:
-          `Error: ${error.message}`,
-
-      });
-
-    } finally {
-
-      setLoading(false);
-
-    }
-
-  };
+          text:
+            `Error: ${error.message}`,
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
 
 
-  const handleApprove = async (
-    requestId
-  ) => {
+  // ============================================================
+  // APPROVE
+  // ============================================================
 
-    try {
+  const handleApprove =
+    async (requestId) => {
+      try {
+        setApprovalLoading(true);
 
-      setApprovalLoading(true);
+
+        const response =
+          await approveRequest(
+            requestId
+          );
 
 
-      const response =
-        await approveRequest(
+        removeApprovalRequest(
           requestId
         );
 
 
-      /*
-        Remove approval panel only
-        after successful execution.
-      */
+        addMessage({
+          role: "agent",
 
-      removeApprovalRequest(
-        requestId
-      );
+          text:
+            response.message ||
+            "Modification executed successfully.",
 
+          result:
+            response.result ||
+            response.rows ||
+            response,
+        });
+      } catch (error) {
+        addMessage({
+          role: "agent",
 
-      addMessage({
-
-        role: "agent",
-
-        text:
-          response.message ||
-          "Modification executed successfully.",
-
-        result:
-          response.result ||
-          response.rows ||
-          response,
-
-      });
-
-    } catch (error) {
-
-      addMessage({
-
-        role: "agent",
-
-        text:
-          `Approval failed: ${error.message}`,
-
-      });
-
-    } finally {
-
-      setApprovalLoading(false);
-
-    }
-
-  };
+          text:
+            `Approval failed: ${error.message}`,
+        });
+      } finally {
+        setApprovalLoading(false);
+      }
+    };
 
 
-  const handleReject = async (
-    requestId
-  ) => {
+  // ============================================================
+  // REJECT
+  // ============================================================
 
-    try {
+  const handleReject =
+    async (requestId) => {
+      try {
+        setApprovalLoading(true);
 
-      setApprovalLoading(true);
+
+        const response =
+          await rejectRequest(
+            requestId
+          );
 
 
-      const response =
-        await rejectRequest(
+        removeApprovalRequest(
           requestId
         );
 
 
-      /*
-        Remove approval panel after
-        successful rejection.
-      */
+        addMessage({
+          role: "agent",
 
-      removeApprovalRequest(
-        requestId
-      );
+          text:
+            response.message ||
+            "Operation rejected.",
+        });
+      } catch (error) {
+        addMessage({
+          role: "agent",
 
-
-      addMessage({
-
-        role: "agent",
-
-        text:
-          response.message ||
-          "Operation rejected.",
-
-      });
-
-    } catch (error) {
-
-      addMessage({
-
-        role: "agent",
-
-        text:
-          `Rejection failed: ${error.message}`,
-
-      });
-
-    } finally {
-
-      setApprovalLoading(false);
-
-    }
-
-  };
+          text:
+            `Rejection failed: ${error.message}`,
+        });
+      } finally {
+        setApprovalLoading(false);
+      }
+    };
 
 
   return (
-
     <div className="chat-page">
 
       <div className="chat-page-header">
@@ -337,14 +235,12 @@ function ChatPage() {
 
 
           <p>
-
             {database.connected
               ? `Connected to ${
                   database.databaseName ||
                   "PostgreSQL"
                 }. Ask anything about your database.`
               : "Connect a database to start querying."}
-
           </p>
 
         </div>
@@ -355,7 +251,6 @@ function ChatPage() {
       <div className="chat-messages">
 
         {messages.length === 0 && (
-
           <div className="empty-chat">
 
             <h2>
@@ -364,16 +259,13 @@ function ChatPage() {
 
 
             <p>
-
               {database.connected
                 ? "Try asking:"
                 : "Connect a database first to begin."}
-
             </p>
 
 
             {database.connected && (
-
               <div className="example-questions">
 
                 <span>
@@ -389,43 +281,32 @@ function ChatPage() {
                 </span>
 
               </div>
-
             )}
 
           </div>
-
         )}
 
 
         {messages.map(
           (message, index) => (
-
             <ChatMessage
-
               key={index}
-
               message={message}
-
               onApprove={
                 handleApprove
               }
-
               onReject={
                 handleReject
               }
-
               approvalLoading={
                 approvalLoading
               }
-
             />
-
           )
         )}
 
 
         {loading && (
-
           <div className="thinking">
 
             <span />
@@ -435,28 +316,22 @@ function ChatPage() {
             Agent is thinking...
 
           </div>
-
         )}
 
       </div>
 
 
       <ChatInput
-
         onSubmit={
           handleAsk
         }
-
         loading={
           loading
         }
-
       />
 
     </div>
-
   );
-
 }
 
 

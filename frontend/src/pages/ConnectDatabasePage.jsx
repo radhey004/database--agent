@@ -9,10 +9,12 @@ import {
   Eye,
   EyeOff,
   ShieldCheck,
+  Plug,
 } from "lucide-react";
 
 import {
-  connectDatabase,
+  connectDatabase as connectDatabaseApi,
+  testDatabaseConnection,
 } from "../api/client";
 
 import {
@@ -21,20 +23,30 @@ import {
 
 
 function ConnectDatabasePage() {
+
   const [
     databaseUrl,
     setDatabaseUrl,
   ] = useState("");
+
 
   const [
     loading,
     setLoading,
   ] = useState(false);
 
+
+  const [
+    testing,
+    setTesting,
+  ] = useState(false);
+
+
   const [
     result,
     setResult,
   ] = useState(null);
+
 
   const [
     showPassword,
@@ -43,117 +55,272 @@ function ConnectDatabasePage() {
 
 
   const {
-    connectDatabase: saveDatabaseConnection,
+    database,
+    connectDatabase,
   } = useDatabase();
 
 
-  const handleSubmit = async (
-    event
-  ) => {
-    event.preventDefault();
+  // ==========================================================
+  // TEST
+  // ==========================================================
 
-    if (!databaseUrl.trim()) {
-      setResult({
-        success: false,
-        message:
-          "Enter a PostgreSQL connection URL.",
-      });
+  const handleTest =
+    async () => {
 
-      return;
-    }
+      if (!databaseUrl.trim()) {
 
-    try {
-      setLoading(true);
-      setResult(null);
+        setResult({
+          success: false,
+          message:
+            "Enter a PostgreSQL connection URL.",
+        });
 
-      const response =
-        await connectDatabase(
-          databaseUrl.trim()
-        );
-
-      /*
-        Only safe metadata is stored
-        in React state.
-
-        The database URL is NOT stored.
-      */
-
-      saveDatabaseConnection({
-        connectionId:
-          response.connection_id,
-
-        databaseName:
-          response.database_name,
-
-        host:
-          response.host,
-
-        version:
-          response.version,
-      });
+        return;
+      }
 
 
-      /*
-        Clear credential immediately
-        from component state.
-      */
+      try {
 
-      setDatabaseUrl("");
+        setTesting(true);
+
+        setResult(null);
 
 
-      setResult({
-        success: true,
+        const response =
+          await testDatabaseConnection(
+            databaseUrl.trim()
+          );
 
-        message:
-          response.message,
 
-        databaseName:
-          response.database_name,
+        setResult({
 
-        host:
-          response.host,
-      });
+          success: true,
 
-    } catch (error) {
+          message:
+            response.message,
 
-      setResult({
-        success: false,
+          databaseName:
+            response.database_name,
 
-        message:
-          error.message,
-      });
+          host:
+            response.host,
 
-    } finally {
+          version:
+            response.version,
 
-      setLoading(false);
-    }
-  };
+        });
+
+      } catch (error) {
+
+        setResult({
+
+          success: false,
+
+          message:
+            error.message,
+
+        });
+
+      } finally {
+
+        setTesting(false);
+
+      }
+
+    };
+
+
+  // ==========================================================
+  // CONNECT
+  // ==========================================================
+
+  const handleSubmit =
+    async (event) => {
+
+      event.preventDefault();
+
+
+      if (!databaseUrl.trim()) {
+
+        setResult({
+
+          success: false,
+
+          message:
+            "Enter a PostgreSQL connection URL.",
+
+        });
+
+        return;
+
+      }
+
+
+      try {
+
+        setLoading(true);
+
+        setResult(null);
+
+
+        const response =
+          await connectDatabaseApi(
+            databaseUrl.trim()
+          );
+
+
+        connectDatabase({
+
+          connectionId:
+            response.connection_id,
+
+          databaseName:
+            response.database_name,
+
+          host:
+            response.host,
+
+          version:
+            response.version,
+
+        });
+
+
+        setDatabaseUrl("");
+
+
+        setResult({
+
+          success: true,
+
+          message:
+            response.message,
+
+          databaseName:
+            response.database_name,
+
+          host:
+            response.host,
+
+        });
+
+      } catch (error) {
+
+        setResult({
+
+          success: false,
+
+          message:
+            error.message,
+
+        });
+
+      } finally {
+
+        setLoading(false);
+
+      }
+
+    };
 
 
   return (
+
     <div className="page-container">
 
       <div className="page-heading">
 
         <div className="page-icon">
+
           <Database size={26} />
+
         </div>
 
+
         <div>
+
           <h2>
             Connect Database
           </h2>
 
           <p>
-            Connect your PostgreSQL
-            database securely to the agent.
+            Connect your PostgreSQL database
+            securely.
           </p>
+
         </div>
 
       </div>
 
 
+      {/* =====================================================
+          CURRENT CONNECTION
+      ====================================================== */}
+
+      {database.connected && (
+
+        <div className="connection-card">
+
+          <div className="connection-result success">
+
+            <CheckCircle2 size={21} />
+
+            <div>
+
+              <strong>
+                Database Connected
+              </strong>
+
+              <p>
+                PostgreSQL
+              </p>
+
+              <small>
+
+                Database:
+                {" "}
+                {database.databaseName}
+
+                <br />
+
+                Host:
+                {" "}
+                {database.host}
+
+              </small>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      )}
+
+
+      {/* =====================================================
+          CONNECT
+      ====================================================== */}
+
       <div className="connection-card">
+
+        <div className="section-heading">
+
+          <div>
+
+            <h3>
+              Connect Database
+            </h3>
+
+            <p>
+              Enter your PostgreSQL connection
+              URL to establish a runtime connection.
+            </p>
+
+          </div>
+
+        </div>
+
 
         <form
           onSubmit={handleSubmit}
@@ -186,46 +353,84 @@ function ConnectDatabasePage() {
               autoComplete="off"
 
               spellCheck="false"
+
+              required
             />
 
 
             <button
               type="button"
-
               onClick={() =>
                 setShowPassword(
                   !showPassword
                 )
               }
             >
+
               {showPassword ? (
                 <EyeOff size={18} />
               ) : (
                 <Eye size={18} />
               )}
+
             </button>
 
           </div>
 
 
           <p className="field-help">
-            Your credentials are used only
-            to establish the database session.
+
+            Your database credentials are used
+            only to establish the runtime connection.
+            They are not stored by this application.
+
           </p>
 
 
-          <button
-            className="connect-button"
+          <div className="connection-form-actions">
 
-            disabled={loading}
-          >
-            {loading
-              ? "Connecting..."
-              : "Connect Database"}
-          </button>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={
+                testing ||
+                loading
+              }
+              onClick={handleTest}
+            >
+
+              <Plug size={16} />
+
+              {testing
+                ? "Testing..."
+                : "Test Connection"}
+
+            </button>
+
+
+            <button
+              type="submit"
+              className="connect-button"
+              disabled={
+                loading ||
+                testing
+              }
+            >
+
+              {loading
+                ? "Connecting..."
+                : "Connect"}
+
+            </button>
+
+          </div>
 
         </form>
 
+
+        {/* =================================================
+            SECURITY
+        ================================================== */}
 
         <div className="security-notice">
 
@@ -234,47 +439,41 @@ function ConnectDatabasePage() {
           <div>
 
             <strong>
-              Your credentials stay private
+              Credential Security
             </strong>
 
             <ul>
+
               <li>
-                Database credentials are sent
-                only when establishing the
-                connection.
+                Database credentials are not
+                stored in browser localStorage.
               </li>
 
               <li>
-                Your browser stores only a
-                temporary connection ID.
+                Database credentials are not
+                stored in the application database.
               </li>
 
               <li>
-                Database passwords are never
-                returned by the API.
+                The AI agent never receives
+                the database password.
               </li>
 
               <li>
-                The AI agent does not receive
-                your database password.
+                Connections are user-scoped
+                runtime sessions.
               </li>
 
-              <li>
-                Connections to PostgreSQL use
-                the database provider's TLS/SSL
-                configuration.
-              </li>
-
-              <li>
-                Disconnecting destroys the
-                server-side database session.
-              </li>
             </ul>
 
           </div>
 
         </div>
 
+
+        {/* =================================================
+            RESULT
+        ================================================== */}
 
         {result && (
 
@@ -296,9 +495,11 @@ function ConnectDatabasePage() {
             <div>
 
               <strong>
+
                 {result.success
-                  ? "Database Connected"
-                  : "Connection Failed"}
+                  ? "Success"
+                  : "Operation Failed"}
+
               </strong>
 
 
@@ -307,20 +508,22 @@ function ConnectDatabasePage() {
               </p>
 
 
-              {result.success && (
+              {result.databaseName && (
+
                 <small>
 
-                  Database: {
-                    result.databaseName
-                  }
+                  Database:
+                  {" "}
+                  {result.databaseName}
 
                   <br />
 
-                  Host: {
-                    result.host
-                  }
+                  Host:
+                  {" "}
+                  {result.host}
 
                 </small>
+
               )}
 
             </div>
@@ -332,7 +535,9 @@ function ConnectDatabasePage() {
       </div>
 
     </div>
+
   );
+
 }
 
 

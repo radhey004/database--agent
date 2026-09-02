@@ -1,12 +1,15 @@
-import re
 import time
 import uuid
 
-from urllib.parse import urlparse
+from urllib.parse import (
+    urlparse,
+)
 
-import psycopg2
+from psycopg2 import (
+    pool,
+)
+from requests import session
 
-from psycopg2 import pool
 
 from .sql_validator import (
     validate_read_sql,
@@ -14,94 +17,143 @@ from .sql_validator import (
 )
 
 
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 MAX_ROWS = 100
 
-SESSION_TTL_SECONDS = 60 * 60
+SESSION_TTL_SECONDS = (
+    24 * 60 * 60
+)
 
+
+# ============================================================
+# CONNECTION MANAGER
+# ============================================================
 
 class ConnectionManager:
 
-    def __init__(self):
+    def __init__(
+        self,
+    ):
 
         self.connections = {}
 
 
+    # ========================================================
+    # CREATE CONNECTION
+    # ========================================================
+
     def create_connection(
         self,
         database_url: str,
+        user_id: str,
     ):
 
         self.cleanup_expired()
+
+        if not user_id:
+
+            raise ValueError(
+                "User identity is required."
+            )
+
+        if not database_url:
+
+            raise ValueError(
+                "Database URL is required."
+            )
 
         connection_id = str(
             uuid.uuid4()
         )
 
-        connection_pool = (
-            pool.SimpleConnectionPool(
-                minconn=1,
-                maxconn=5,
-                dsn=database_url,
-            )
-        )
-
-        conn = None
+        connection_pool = None
 
         try:
 
-            conn = (
-                connection_pool.getconn()
+            connection_pool = (
+                pool.SimpleConnectionPool(
+
+                    minconn=1,
+
+                    maxconn=5,
+
+                    dsn=database_url,
+                )
             )
 
-            cursor = conn.cursor()
+            conn = None
 
-            cursor.execute(
-                "SELECT version();"
-            )
+            try:
 
-            version = (
-                cursor.fetchone()[0]
-            )
+                conn = (
+                    connection_pool
+                    .getconn()
+                )
 
-            cursor.close()
+                cursor = (
+                    conn.cursor()
+                )
+
+                cursor.execute(
+                    "SELECT version();"
+                )
+
+                version = (
+                    cursor
+                    .fetchone()[0]
+                )
+
+                cursor.close()
+
+            finally:
+
+                if conn:
+
+                    connection_pool.putconn(
+                        conn
+                    )
 
         except Exception:
 
-            connection_pool.closeall()
+            if connection_pool:
+
+                connection_pool.closeall()
 
             raise
-
-        finally:
-
-            if conn:
-
-                connection_pool.putconn(
-                    conn
-                )
-
 
         parsed = urlparse(
             database_url
         )
 
         database_name = (
-            parsed.path.lstrip("/")
+            parsed.path
+            .lstrip("/")
         )
 
-        host = parsed.hostname
+        host = (
+            parsed.hostname
+        )
 
+        now = time.time()
 
         self.connections[
             connection_id
         ] = {
+
+            "user_id":
+                str(user_id),
+
             "pool":
                 connection_pool,
 
             "created_at":
-                time.time(),
+                now,
 
             "last_used":
-                time.time(),
+                now,
 
             "database_name":
                 database_name,
@@ -113,8 +165,8 @@ class ConnectionManager:
                 version,
         }
 
-
         return {
+
             "connection_id":
                 connection_id,
 
@@ -129,12 +181,21 @@ class ConnectionManager:
         }
 
 
-    def get_connection_pool(
+    # ========================================================
+    # VERIFY OWNER
+    # ========================================================
+
+    def verify_owner(
         self,
         connection_id: str,
+        user_id: str,
     ):
 
-        self.cleanup_expired()
+        if not user_id:
+
+            raise PermissionError(
+                "Authenticated user is required."
+            )
 
         session = (
             self.connections.get(
@@ -149,38 +210,120 @@ class ConnectionManager:
                 "or expired."
             )
 
+        if (
+            session["user_id"]
+            != str(user_id)
+        ):
+
+            raise PermissionError(
+                "You are not authorized "
+                "to use this database connection."
+            )
+
+        # Every successful request refreshes
+        # the inactivity timer.
+
         session[
             "last_used"
         ] = time.time()
 
-        return session[
-            "pool"
-        ]
+        return session
 
+
+    # ========================================================
+    # GET CONNECTION INFO
+    # ========================================================
+
+    def get_connection_info(
+        self,
+        connection_id: str,
+        user_id: str,
+    ):
+
+        session = self.verify_owner(
+            connection_id,
+            user_id,
+        )
+
+        return {
+
+            "connection_id":
+                connection_id,
+
+            "database_name":
+                session.get(
+                    "database_name"
+                ),
+
+            "host":
+                session.get(
+                    "host"
+                ),
+
+            "version":
+                session.get(
+                    "version"
+                ),
+        }
+
+
+    # ========================================================
+    # GET CONNECTION POOL
+    # ========================================================
+
+    def get_connection_pool(
+        self,
+        connection_id: str,
+        user_id: str,
+    ):
+
+        session = (
+            self.verify_owner(
+                connection_id,
+                user_id,
+            )
+        )
+
+        return session["pool"]
+
+
+    # ========================================================
+    # DISCONNECT
+    # ========================================================
 
     def disconnect(
         self,
         connection_id: str,
+        user_id: str,
     ):
 
         session = (
-            self.connections.pop(
+            self.verify_owner(
                 connection_id,
-                None,
+                user_id,
             )
         )
 
-        if not session:
-
-            raise ValueError(
-                "Database connection not found "
-                "or already disconnected."
+        session = (
+            self.connections.pop(
+                connection_id
             )
+        )
 
-        session[
-            "pool"
-        ].closeall()
+        try:
 
+            session[
+                "pool"
+            ].closeall()
+
+        except Exception:
+
+            pass
+
+
+    # ========================================================
+    # CLEANUP EXPIRED CONNECTIONS
+    # ========================================================
 
     def cleanup_expired(
         self,
@@ -190,17 +333,16 @@ class ConnectionManager:
 
         expired_ids = []
 
-
         for (
             connection_id,
             session,
-        ) in self.connections.items():
+        ) in list(
+            self.connections.items()
+        ):
 
             inactive_for = (
                 now
-                - session[
-                    "last_used"
-                ]
+                - session["last_used"]
             )
 
             if (
@@ -212,8 +354,9 @@ class ConnectionManager:
                     connection_id
                 )
 
-
-        for connection_id in expired_ids:
+        for connection_id in (
+            expired_ids
+        ):
 
             session = (
                 self.connections.pop(
@@ -224,24 +367,46 @@ class ConnectionManager:
 
             if session:
 
-                session[
-                    "pool"
-                ].closeall()
+                try:
 
+                    session[
+                        "pool"
+                    ].closeall()
+
+                except Exception:
+
+                    pass
+
+
+# ============================================================
+# GLOBAL CONNECTION MANAGER
+# ============================================================
 
 connection_manager = (
     ConnectionManager()
 )
 
 
+# ============================================================
+# DATABASE CONNECTION
+# ============================================================
+
 def get_connection(
     connection_id: str,
+    user_id: str,
 ):
+
+    if not user_id:
+
+        raise PermissionError(
+            "Authenticated user is required."
+        )
 
     connection_pool = (
         connection_manager
         .get_connection_pool(
-            connection_id
+            connection_id,
+            user_id,
         )
     )
 
@@ -260,63 +425,108 @@ def release_connection(
     conn,
 ):
 
-    connection_pool.putconn(
-        conn
-    )
+    if conn:
 
+        try:
+
+            connection_pool.putconn(
+                conn
+            )
+
+        except Exception:
+
+            try:
+
+                connection_pool.putconn(
+                    conn,
+                    close=True,
+                )
+
+            except Exception:
+
+                pass
+
+
+# ============================================================
+# GET SCHEMA
+# ============================================================
 
 def get_schema(
     connection_id: str,
+    user_id: str,
 ):
 
     connection_pool, conn = (
         get_connection(
-            connection_id
+            connection_id,
+            user_id,
         )
     )
 
-    cur = conn.cursor()
+    cur = None
 
     try:
 
-        cur.execute("""
+        cur = conn.cursor()
+
+        cur.execute(
+            """
             SELECT
                 c.table_name,
                 c.column_name,
                 c.data_type,
                 c.is_nullable,
                 c.column_default,
+
                 CASE
-                    WHEN tc.constraint_type = 'PRIMARY KEY'
+                    WHEN EXISTS (
+                        SELECT 1
+
+                        FROM
+                            information_schema
+                            .table_constraints tc
+
+                        JOIN
+                            information_schema
+                            .key_column_usage kcu
+
+                        ON
+                            tc.constraint_name =
+                            kcu.constraint_name
+
+                        AND
+                            tc.table_schema =
+                            kcu.table_schema
+
+                        AND
+                            tc.table_name =
+                            kcu.table_name
+
+                        WHERE
+                            tc.constraint_type =
+                            'PRIMARY KEY'
+
+                        AND
+                            kcu.table_schema =
+                            c.table_schema
+
+                        AND
+                            kcu.table_name =
+                            c.table_name
+
+                        AND
+                            kcu.column_name =
+                            c.column_name
+                    )
+
                     THEN true
+
                     ELSE false
+
                 END AS is_primary_key
 
-            FROM information_schema.columns c
-
-            LEFT JOIN
-                information_schema.key_column_usage kcu
-
-                ON c.table_schema =
-                    kcu.table_schema
-
-                AND c.table_name =
-                    kcu.table_name
-
-                AND c.column_name =
-                    kcu.column_name
-
-            LEFT JOIN
-                information_schema.table_constraints tc
-
-                ON kcu.constraint_name =
-                    tc.constraint_name
-
-                AND kcu.table_schema =
-                    tc.table_schema
-
-                AND kcu.table_name =
-                    tc.table_name
+            FROM
+                information_schema.columns c
 
             WHERE
                 c.table_schema = 'public'
@@ -324,12 +534,14 @@ def get_schema(
             ORDER BY
                 c.table_name,
                 c.ordinal_position;
-        """)
+            """
+        )
 
-        rows = cur.fetchall()
+        rows = (
+            cur.fetchall()
+        )
 
         schema = {}
-
 
         for (
             table,
@@ -342,14 +554,19 @@ def get_schema(
 
             if table not in schema:
 
-                schema[table] = {
-                    "columns": []
-                }
+                schema[
+                    table
+                ] = {
 
+                    "columns":
+                        []
+                }
 
             schema[
                 table
-            ]["columns"].append({
+            ][
+                "columns"
+            ].append({
 
                 "name":
                     column,
@@ -364,15 +581,18 @@ def get_schema(
                     default,
 
                 "primary_key":
-                    bool(primary_key),
+                    bool(
+                        primary_key
+                    ),
             })
-
 
         return schema
 
     finally:
 
-        cur.close()
+        if cur:
+
+            cur.close()
 
         release_connection(
             connection_pool,
@@ -380,9 +600,14 @@ def get_schema(
         )
 
 
+# ============================================================
+# EXECUTE READ QUERY
+# ============================================================
+
 def execute_query(
     connection_id: str,
     query: str,
+    user_id: str,
 ):
 
     query = validate_read_sql(
@@ -391,13 +616,16 @@ def execute_query(
 
     connection_pool, conn = (
         get_connection(
-            connection_id
+            connection_id,
+            user_id,
         )
     )
 
-    cur = conn.cursor()
+    cur = None
 
     try:
+
+        cur = conn.cursor()
 
         cur.execute(
             query
@@ -409,7 +637,6 @@ def execute_query(
                 "Query did not return any data."
             )
 
-
         columns = [
 
             column[0]
@@ -418,11 +645,11 @@ def execute_query(
             in cur.description
         ]
 
-
-        rows = cur.fetchmany(
-            MAX_ROWS
+        rows = (
+            cur.fetchmany(
+                MAX_ROWS
+            )
         )
-
 
         return [
 
@@ -439,7 +666,9 @@ def execute_query(
 
     finally:
 
-        cur.close()
+        if cur:
+
+            cur.close()
 
         release_connection(
             connection_pool,
@@ -447,114 +676,14 @@ def execute_query(
         )
 
 
-def _get_operation(
-    query: str,
-):
-
-    normalized = " ".join(
-        query.upper().split()
-    )
-
-
-    for operation in (
-
-        "INSERT",
-        "UPDATE",
-        "DELETE",
-        "CREATE",
-        "ALTER",
-        "DROP",
-
-    ):
-
-        if normalized.startswith(
-            operation
-        ):
-
-            return operation
-
-
-    return "MODIFICATION"
-
-
-def _get_target(
-    query: str,
-):
-
-    patterns = [
-
-        r"\bUPDATE\s+"
-        r"([a-zA-Z_][\w.]*)",
-
-        r"\bDELETE\s+FROM\s+"
-        r"([a-zA-Z_][\w.]*)",
-
-        r"\bINSERT\s+INTO\s+"
-        r"([a-zA-Z_][\w.]*)",
-
-        r"\bCREATE\s+TABLE\s+"
-        r"(?:IF\s+NOT\s+EXISTS\s+)?"
-        r"([a-zA-Z_][\w.]*)",
-
-        r"\bALTER\s+TABLE\s+"
-        r"([a-zA-Z_][\w.]*)",
-
-        r"\bDROP\s+TABLE\s+"
-        r"(?:IF\s+EXISTS\s+)?"
-        r"([a-zA-Z_][\w.]*)",
-    ]
-
-
-    for pattern in patterns:
-
-        match = re.search(
-            pattern,
-            query,
-            re.IGNORECASE,
-        )
-
-        if match:
-
-            return match.group(
-                1
-            )
-
-
-    return None
-
+# ============================================================
+# PREVIEW MODIFICATION
+# ============================================================
 
 def preview_modification(
     connection_id: str,
     query: str,
-):
-
-    validate_write_sql(
-        query
-    )
-
-    return {
-
-        "operation":
-            _get_operation(
-                query
-            ),
-
-        "target":
-            _get_target(
-                query
-            ),
-
-        "query":
-            query,
-
-        "connection_id":
-            connection_id,
-    }
-
-
-def execute_modification(
-    connection_id: str,
-    query: str,
+    user_id: str,
 ):
 
     query = validate_write_sql(
@@ -563,13 +692,107 @@ def execute_modification(
 
     connection_pool, conn = (
         get_connection(
-            connection_id
+            connection_id,
+            user_id,
         )
     )
 
-    cur = conn.cursor()
+    cur = None
 
     try:
+
+        cur = conn.cursor()
+
+        # ----------------------------------------------------
+        # Use a transaction that is ALWAYS rolled back.
+        #
+        # This lets PostgreSQL validate and execute the
+        # modification without permanently changing data.
+        # ----------------------------------------------------
+
+        cur.execute(
+            "BEGIN;"
+        )
+
+        cur.execute(
+            query
+        )
+
+        row_count = (
+            cur.rowcount
+        )
+
+        preview = {
+
+            "operation":
+                query
+                .split(
+                    None,
+                    1,
+                )[0]
+                .upper(),
+
+            "affected_rows":
+                row_count,
+
+            "query":
+                query,
+        }
+
+        conn.rollback()
+
+        return preview
+
+    except Exception:
+
+        try:
+
+            conn.rollback()
+
+        except Exception:
+
+            pass
+
+        raise
+
+    finally:
+
+        if cur:
+
+            cur.close()
+
+        release_connection(
+            connection_pool,
+            conn,
+        )
+
+
+# ============================================================
+# EXECUTE MODIFICATION
+# ============================================================
+
+def execute_modification(
+    connection_id: str,
+    query: str,
+    user_id: str,
+):
+
+    query = validate_write_sql(
+        query
+    )
+
+    connection_pool, conn = (
+        get_connection(
+            connection_id,
+            user_id,
+        )
+    )
+
+    cur = None
+
+    try:
+
+        cur = conn.cursor()
 
         cur.execute(
             query
@@ -581,35 +804,32 @@ def execute_modification(
 
         conn.commit()
 
-
         return {
-
-            "success":
-                True,
-
-            "operation":
-                _get_operation(
-                    query
-                ),
-
-            "target":
-                _get_target(
-                    query
-                ),
 
             "affected_rows":
                 affected_rows,
+
+            "message":
+                "Modification executed successfully.",
         }
 
     except Exception:
 
-        conn.rollback()
+        try:
+
+            conn.rollback()
+
+        except Exception:
+
+            pass
 
         raise
 
     finally:
 
-        cur.close()
+        if cur:
+
+            cur.close()
 
         release_connection(
             connection_pool,
