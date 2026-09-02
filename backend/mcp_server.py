@@ -1,6 +1,6 @@
 import json
 import logging
-
+import os
 from mcp.server.mcpserver import MCPServer
 
 from .database import (
@@ -539,9 +539,9 @@ if __name__ == "__main__":
     )
 
     mcp.run(
-        transport="streamable-http",
-        host="127.0.0.1",
-        port=9000,
-        stateless_http=False,
-        json_response=True,
-    )
+    transport="streamable-http",
+    host="0.0.0.0",
+    port=int(os.getenv("PORT", "9000")),
+    stateless_http=False,
+    json_response=True,
+)
