@@ -131,7 +131,7 @@ def set_auth_cookie(
 
         httponly=True,
 
-        secure=AUTH_COOKIE_SECURE,
+        secure=True,
 
         samesite="none",
 
