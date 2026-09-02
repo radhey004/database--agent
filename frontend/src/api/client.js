@@ -1,48 +1,27 @@
-const API_URL =
-  "http://localhost:8001";
+const API_BASE_URL = import.meta.env.VITE_API_URL;
 
-
-async function request(
-  endpoint,
-  options = {}
-) {
-
-  const response =
-    await fetch(
-      `${API_URL}${endpoint}`,
-      {
-        ...options,
-
-        credentials:
-          "include",
-      }
-    );
-
+async function request(endpoint, options = {}) {
+  const response = await fetch(
+    `${API_BASE_URL}${endpoint}`,
+    {
+      ...options,
+      credentials: "include",
+    }
+  );
 
   let data = null;
 
-
   try {
-
-    data =
-      await response.json();
-
+    data = await response.json();
   } catch {
-
     data = {};
-
   }
-
 
   if (!response.ok) {
-
     throw new Error(
-      data.detail ||
-      "Something went wrong."
+      data.detail || "Something went wrong."
     );
-
   }
-
 
   return data;
 }

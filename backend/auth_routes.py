@@ -133,7 +133,7 @@ def set_auth_cookie(
 
         secure=AUTH_COOKIE_SECURE,
 
-        samesite="lax",
+        samesite="none",
 
         path="/",
     )
