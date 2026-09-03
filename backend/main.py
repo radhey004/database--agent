@@ -45,6 +45,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://localhost:5174",
+        "https://database-agent-nine.vercel.app",
     ],
 
     allow_credentials=True,
