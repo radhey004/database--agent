@@ -249,12 +249,14 @@ async def connect_database(
 
         raise
 
-    except Exception:
+    except Exception as error:
+
+        print("DATABASE CONNECT ERROR:", repr(error))
 
         raise HTTPException(
             500,
-            "Failed to connect to the database.",
-        )
+            detail=f"Failed to connect to the database: {error}",
+    )
 
     finally:
 

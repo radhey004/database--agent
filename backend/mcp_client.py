@@ -113,16 +113,18 @@ async def call_tool(
 
     except Exception as error:
 
+        print(
+            f"MCP CLIENT ERROR [{name}]:",
+            repr(error),
+        )
+
         raise MCPToolError(
             tool_name=name,
-
             message=(
                 f"MCP tool '{name}' failed: "
                 f"{error}"
             ),
-
             retryable=True,
-
         ) from error
 
 
