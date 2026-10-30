@@ -101,7 +101,7 @@ OLLAMA_MODEL = os.getenv(
 
 MCP_SERVER_URL = os.getenv(
     "MCP_SERVER_URL",
-    "https://database-agent-mcp.onrender.com",
+    "https://database-agent-mcp.onrender.com/mcp",
 )
 
 
